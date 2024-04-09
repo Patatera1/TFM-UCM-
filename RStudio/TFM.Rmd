@@ -1,0 +1,3000 @@
+---
+title: "TFM"
+author: "Fernando Plata Morán"
+date: "2023-05-29"
+output: word_document
+---
+
+```{r eval = TRUE}
+# Se limpia el escritorio:
+
+rm(list = ls())
+
+
+```
+
+
+```{r setup, include = FALSE}
+# Ajuste comunes de los chunk:
+
+knitr::opts_chunk$set(fig.width = 9, fig.asp = 1, out.width = "100%",
+                      message = FALSE, warning = FALSE,
+                      echo = TRUE, res = 400)
+
+
+```
+
+# Introducción
+
+Este trabajo está orientado a predecir una variable binaria a través de diferentes algoritmos de clasificación.   
+
+Concretamente, se quiere **predecir la mortalidad a un año de pacientes que han sufrido una insuficiencia cardíaca del dataset HF**.   
+
+Para ello, se procede a **implementar varios algoritmos de clasificación: 'Regresión Logística', 'Redes Neuronales', 'Bagging', 'Rf' (Random Forest), 'Gbm', 'XGboost', 'SVM', 'Ensamblados' y 'Árbol de decisión'** al conjunto HF.   
+
+
+# Librerías
+
+```{r eval = TRUE}
+# Se cargan librerías necesarias:
+
+library(parallel)
+library(doParallel)
+library(plyr)
+library(dummies)
+library(ggplot2)
+library(naniar)
+library(MASS)
+library(caret)
+library(Boruta)
+library(MXM)
+library(dplyr)
+library(skimr)
+library(pROC)
+library(dummies)
+library(randomForest)
+library(purrr)
+library(corrplot)
+library(forcats)
+library(recipes)
+library(rsample)
+library(psych)
+library(stats)
+library(visualpred)
+library(rpart)
+library(rpart.plot)
+
+# Se inicia la paralelización:
+
+clusters <- detectCores() - 1
+make_cluster <- makeCluster(clusters)
+registerDoParallel(make_cluster)
+
+
+```
+
+
+# Datos
+
+Se va a hacer uso del dataset *"HF.csv"*:   
+
+```{r eval = TRUE}
+# Se lee el fichero:
+
+HF <- read.csv("HF_TFM.csv")
+HF
+
+
+```
+
+
+Los datos forman parte de un **conjunto de características de pacientes que han sufrido un episodio de insuficiencia cardíaca, así como de medicamentos suministrados a estos pacientes para prevenir futuros riesgos**, con 786 observaciones.
+
+📚 **Detalle de variables**: <https://journals.viamedica.pl/cardiology_journal/article/view/CJ.2012.0108/18174>
+
+
+# Metodología
+
+La forma de proceder será la siguiente:  
+ - 1. En primer lugar, se realizará un breve análisis exploratorio y descripción de las variables.   
+ - 2. A continuación, se argumentará la razón de no efectuar submuestreo y se determinará el balanceamiento de la variable objetivo.   
+ - 3. Después, se llevará a cabo la modificación de los datos: depuración, codificación, dummyficación...   
+ - 4. Más adelante, se efecturá un chequeo inicial.  
+ - 5. Tras esto, se estudiarán varios métodos de selección de variables.   
+ - 6. Posteriormente, se obtendrá un modelo de regresión logística para cada método de selección de variables y se compararán los resultados obtenidos mediante un gráfico boxplot. Además, se tomarán decisiones sobre los modelos más prometedores teniendo en cuenta sesgo, varianza y número de variables.  
+ - 7. Seguidamente, se tunearán distintas redes neuronales.  
+ - 8. Luego, se comparará la mejor red con el resto de modelos añadiéndola al gráfico boxplot anterior.   
+ - 9. En siguiente lugar, se procederá al tuneado de los algoritmos ‘Bagging’ y ‘Rf’.  
+ - 10. En este apartado, se añadirán los mejores modelos ‘Bagging y ‘Rf’ a la comparativa con los modelos anteriores.
+ - 11. De forma análoga, se realizará el tuneado del algoritmo ‘Gbm’.
+ - 12. Nuevamente, se incluirá el modelo ‘Gbm’ en el gráfico boxplot citado, comparándolos con el resto de modelos. 
+ - 13. Para continuar, se codificará el tuneado del algoritmo ‘XGboost’.
+ - 14. Se incorporará este nuevo modelo a nuestro gráfico boxplot, realizando las comparaciones pertinentes.
+ - 15. En esta sección, se tunearán los algoritmos ‘SVM (lineal)’, ‘SVM (polinomial)’ y ‘SVM (RBF)’.
+ - 16. Como ya es habitual, se anexarán los tres modelos SVM al gráfico boxplot mencionado, con su correspondiente comparativa con los modelos ya nombrados.
+ - 17. Además, se construirán modelos ensamblados y se implementarán los más interesantes en nuestro conocido gráfico boxplot.
+ - 18. Una vez llegados a este punto, se escogerá el mejor modelo para nuestros datos.
+ - 19. Entonces, se expondrán las características de nuestro modelo elegido.
+ - 20. Como última opción, se modelizará un árbol de decisión.
+ - 21. Se representarán gráficos con el fin de obtener un enfoque visual de nuestro modelo.
+ - 22. Finalmente, se darán unas breves conclusiones y reflexión personal.    
+
+
+# Desarrollo
+
+Antes que nada, **vamos a retranscibir los valores de la variable objetivo del dataset HF**:    
+
+```{r eval = TRUE}
+# Retranscipción:
+
+HF <- HF |> 
+  mutate(mortalidad = ifelse(mortalidad == "0", "No", "Yes"))
+
+HF
+
+
+```
+
+
+Se podría haber realizado más adelante, pero hemos preferido llevarla a cabo al inicio con el fin de realizar una exploración de las variables lo más adecuada posible.  
+
+## 1: Análisis exploratorio y descripción de las variables.
+
+Lo primero es conocer las variables:  
+
+```{r eval = TRUE}
+# Vistazo general a las variables:
+
+HF |> glimpse()
+
+
+```
+
+
+* `edad`: intervalo de edad del paciente.  
+* `sexo`: sexo del paciente.   
+* `cardiopatia_isquemica`: ¿El paciente ha sufrido una cardiopatía isquémica?  
+* `fibrilacion_auricular`: ¿El paciente ha presentado fibrilación auricular?  
+* `presion_arterial_sistolica`: presión arterial sistólica del paciente (mmHg).  
+* `presion_arterial_diastolica`: presión arterial diastólica del paciente (mmHg).   
+* `crepitantes`: ¿El paciente ha presentado crepitantes?  
+* `tercer_tono_cardiaco`: ¿El paciente ha presentado tercer tono cardíaco?  
+* `ingurgitacion_yugular`: ¿El paciente ha sufrido ingurgitación yugular?   
+* `hepatomegalia`: ¿El paciente ha sufrido hepatomegalia?  
+* `reflujo_hepatoyugular`: ¿El paciente ha sufrido reflujo hepatoyugular?   
+* `edemas`: ¿El paciente ha presentado edemas?.  
+* `creatinina`: niveles de creatinina en sangre (mg/dL).   
+* `sodio`: niveles de sodio en sangre (mEq/L ~ miliequivalentes/L).  
+* `potasio`: niveles de potasio en sangre (mEq/L).   
+* `hemoglobina`: niveles de hemoglobina (g/dL).   
+* `inhibidores_ECA`: ¿Se le ha suministrado medicamentos inhibidores de la ECA al paciente?   
+* `betabloqueadores`: ¿Se le ha suministrado medicamentos betabloqueadores al paciente?  
+* `antagonistas_receptores_angiotensina_II`: ¿Se le ha suministrado medicamentos antagonistas de los receptores de angiotensina II al paciente?   
+* `antagonistas_calcio`: ¿Se le ha suministrado medicamentos antagonistas de calcio al paciente?  
+* `antiagregantes`: ¿Se le ha suministrado antiagregantes al paciente?  
+* `anticoagulantes_orales`: ¿Se le ha suministrado anticoagulantes (orales) al paciente?  
+* `digoxina`: ¿Se le ha suministrado digoxina al paciente?   
+* `diureticos`: ¿Se le ha suministrado diuréticos al paciente?   
+* `estatinas`: ¿Se le ha suministrado estatinas al paciente?  
+* `mononitrato_isosorbida`: ¿Se le ha suministrado mononitrato de isosorbida al paciente?  
+* `valvulopatias`: ¿El paciente ha presentado valvulopatías?  
+* `mortalidad`: ¿El paciente falleció al año de sufrir el primer episodio de insuficiencia cardíaca?   
+
+Además, se pueden **extraer algunas estadísticas básicas** de nuestros datos:  
+
+```{r eval = TRUE}
+# Resumen numérico:
+
+HF |> skim()
+
+
+```
+
+
+Un primer vistazo a este resumen nos refleja que **no parece que haya problemas de rango**. **No hay valores ausentes, pero sí outliers** (a la vista de los histogramas). También se observa que **no todas las variables predictoras son numéricas, por lo que nos tocará dummyficar**.  
+
+El tipo de cada variable ya se ha visualizado con la misma función `skim()`:  
+
+ - Hay **21 variables de tipo carácter**.  
+ - Hay **7 variables de tipo numérico**.  
+ 
+Se observa que **todas las variables de tipo carácter son categóricas**. Habrá que **convertirlas a factor**.  
+
+Analicemos las variables predictoras más en profundidad:  
+
+```{r eval = TRUE}
+# Análisis de la variable "edad":
+## Porcentaje de la variable "edad":
+
+HF |> 
+count(edad, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "edad":
+
+HF |> 
+group_by(edad) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "edad":
+
+ggplot(HF, aes(x = edad, color = mortalidad, fill = mortalidad)) +
+  geom_histogram(alpha = 0.8) +
+  labs(title = "Histograma variable Edad", x = "Edad", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "edad"** toma 64 valores distintos.  
+
+La mayoría de pacientes tienen entre 60 y 89 años.  
+
+```{r eval = TRUE}
+# Análisis de la variable "sexo":
+## Porcentaje de la variable "sexo":
+
+HF |> 
+count(sexo, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "sexo":
+
+HF |> 
+group_by(sexo) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "sexo":
+
+ggplot(HF, aes(x = sexo, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Sexo", x = "Sexo", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "sexo"** es binaria.  
+
+Hay pocas más mujeres que hombres, aunque el porcentaje de fallecidos en ambos sexos es muy parecido.  
+
+```{r eval = TRUE}
+# Análisis de la variable "cardiopatia_isquemica":
+## Porcentaje de la variable "cardiopatia_isquemica":
+
+HF |> 
+count(cardiopatia_isquemica, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "cardiopatia_isquemica":
+
+HF |> 
+group_by(cardiopatia_isquemica) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "cardiopatia_isquemica":
+
+ggplot(HF, aes(x = cardiopatia_isquemica, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Cardiopatia_isquemica", x = "Cardiopatia_isquemica", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "cardiopatia_isquemica"** es binaria.   
+
+Sólo un 15% de los pacientes registrados han sufrido dicho síntoma.   
+
+```{r eval = TRUE}
+# Análisis de la variable "fibrilacion_auricular":
+## Porcentaje de la variable "fibrilacion_auricular":
+
+HF |> 
+count(fibrilacion_auricular, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "fibrilacion_auricular":
+
+HF |> 
+group_by(fibrilacion_auricular) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "fibrilacion_auricular":
+
+ggplot(HF, aes(x = fibrilacion_auricular, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Fibrilacion_auricular", x = "Fibrilacion_auricular", y = "Frecuencia") + 
+  theme_minimal()
+
+
+
+```
+
+
+La **variable "fibrilacion_auricular"** es binaria.   
+
+Casi un 30% de los pacientes registrados han sufrido fibrilación auricular.  
+
+```{r eval = TRUE}
+# Análisis de la variable "presion_arterial_sistolica":
+## Porcentaje de la variable "presion_arterial_sistolica":
+
+HF |> 
+count(presion_arterial_sistolica) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "presion_arterial_sistolica":
+
+HF |> 
+group_by(presion_arterial_sistolica) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "presion_arterial_sistolica":
+
+ggplot(HF, aes(x = presion_arterial_sistolica, color = mortalidad, fill = mortalidad)) +
+  geom_histogram(alpha = 0.8) +
+  labs(title = "Histograma variable Presion_arterial_sistolica", x = "Presion_arterial_sistolica", 
+  y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "presion_arterial_sistolica"** consta de 123 valores distintos.   
+
+Aunque los valores de presión arterial sistólica varían en función de la edad, el rango normal en adultos sanos se considera, generalmente, entre 90 y 130 mmHg. En las etapas iniciales de la insuficiencia cardíaca, la presión arterial sistólica puede estar dentro del rango normal o ligeramente elevada. Sin embargo, a medida que la enfermedad progresa y el corazón se debilita, la presión arterial sistólica tiende a disminuir.  
+
+Podemos observar que gran parte de los pacientes registrados han sobrepasado este límite, lo cual es lógico al haber sufrido un episodio de insuficiencia cardíaca.  
+
+```{r eval = TRUE}
+# Análisis de la variable "presion_arterial_diastolica":
+## Porcentaje de la variable "presion_arterial_diastolica":
+
+HF |> 
+count(presion_arterial_diastolica) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "presion_arterial_diastolica":
+
+HF |> 
+group_by(presion_arterial_diastolica) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "presion_arterial_diastolica":
+
+ggplot(HF, aes(x = presion_arterial_diastolica, color = mortalidad, fill = mortalidad)) +
+  geom_histogram(alpha = 0.8) +
+  labs(title = "Histograma variable Presion_arterial_diastolica", x = "Presion_arterial_diastolica", 
+  y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "presion_arterial_diastolica"** presenta 90 valores distintos.   
+
+De forma análoga a la variable anterior, aunque los valores de presión arterial diastólica varían en función de edad, sí que hay un cierto límite a partir del cual hablamos de hipertensión arterial: 80 mmHg.  
+
+Se observa que algo menos de la mitad de pacientes registrados han sobrepasado este límite.  
+
+```{r eval = TRUE}
+# Análisis de la variable "crepitantes":
+## Porcentaje de la variable "crepitantes":
+
+HF |> 
+count(crepitantes, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "crepitantes":
+
+HF |> 
+group_by(crepitantes) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "crepitantes":
+
+ggplot(HF, aes(x = crepitantes, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Crepitantes", x = "Crepitantes", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "crepitantes"** es binaria.  
+
+Más de 2/3 de los pacientes han presentado tal síntoma.   
+
+```{r eval = TRUE}
+# Análisis de la variable "tercer_tono_cardiaco":
+## Porcentaje de la variable "tercer_tono_cardiaco":
+
+HF |> 
+count(tercer_tono_cardiaco, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "tercer_tono_cardiaco":
+
+HF |> 
+group_by(tercer_tono_cardiaco) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "tercer_tono_cardiaco":
+
+ggplot(HF, aes(x = tercer_tono_cardiaco, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Tercer_tono_cardiaco", x = "Tercer_tono_cardiaco", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "tercer_tono_cardiaco"** es binaria.  
+
+Apenas un 5.4% de los pacientes registrados han presentado tercer tono cardíaco.    
+
+```{r eval = TRUE}
+# Análisis de la variable "ingurgitacion_yugular":
+## Porcentaje de la variable "ingurgitacion_yugular":
+
+HF |> 
+count(ingurgitacion_yugular, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "ingurgitacion_yugular":
+
+HF |> 
+group_by(ingurgitacion_yugular) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "ingurgitacion_yugular":
+
+ggplot(HF, aes(x = ingurgitacion_yugular, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Ingurgitacion_yugular", x = "Ingurgitacion_yugular", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "ingurgitacion_yugular"** es binaria.  
+
+Sólo un 20.9%, aproximadamente, de los pacientes registrados han sufrido dicho síntoma.  
+
+```{r eval = TRUE}
+# Análisis de la variable "hepatomegalia":
+## Porcentaje de la variable "hepatomegalia":
+
+HF |> 
+count(hepatomegalia, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "hepatomegalia":
+
+HF |> 
+group_by(hepatomegalia) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "hepatomegalia":
+
+ggplot(HF, aes(x = hepatomegalia, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Hepatomegalia", x = "Hepatomegalia", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "hepatomegalia"** es binaria.  
+
+Tan sólo un 11.5% de los pacientes registrados han sufrido este síntoma.  
+
+```{r eval = TRUE}
+# Análisis de la variable "reflujo_hepatoyugular":
+## Porcentaje de la variable "reflujo_hepatoyugular":
+
+HF |> 
+count(reflujo_hepatoyugular, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "reflujo_hepatoyugular":
+
+HF |> 
+group_by(reflujo_hepatoyugular) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "reflujo_hepatoyugular":
+
+ggplot(HF, aes(x = reflujo_hepatoyugular, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diaagrama variable Reflujo_hepatoyugular", x = "Reflujo_hepatoyugular", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "reflujo_hepatoyugular"** es binaria.  
+
+Se puede observar que los pacientes que han presentado tal síntoma no llegan al 6% de los totales registrados.  
+
+```{r eval = TRUE}
+# Análisis de la variable "edemas":
+## Porcentaje de la variable "edemas":
+
+HF |> 
+count(edemas, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "edemas":
+
+HF |> 
+group_by(edemas) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "edemas":
+
+ggplot(HF, aes(x = edemas, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Edemas", x = "Edemas", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "edemas"** es binaria.   
+
+Más de 2/3 de los pacientes registrados presentaron edemas.  
+
+```{r eval = TRUE}
+# Análisis de la variable "creatinina":
+## Porcentaje de la variable "creatinina":
+
+HF |> 
+count(creatinina) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "creatinina":
+
+HF |> 
+group_by(creatinina) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "creatinina":
+
+ggplot(HF, aes(x = creatinina, color = mortalidad, fill = mortalidad)) +
+  geom_histogram(alpha = 0.8) +
+  labs(title = "Histograma variable Creatinina", x = "Creatinina", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "creatinina"** tiene 160 valores distintos.  
+
+Los niveles normales de creatinina en sangre se estiman entre 0.7 y 1.3 mg/dL en hombres y entre 0.6 y 1.1 mg/dL en mujeres. Aunque dependen de varios factores, como la edad. Niveles superiores a 1.3 mg/dL en hombres o 1.1 mg/dL en mujeres pueden ser signo de una insuficiencia cardiaca padecida.   
+
+En nuestro caso, casi el 25.5% de los pacientes hombres registrados presentaron niveles de creatinina en sangre superiores a 1.3 mg/dL. Por otra parte, poco más del 38.6% de las pacientes mujeres registradas han presentado niveles de creatinina en sangre superiores a 1.1 mg/dL.   
+
+```{r eval = TRUE}
+# Análisis de la variable "sodio":
+## Porcentaje de la variable "sodio":
+
+HF |> 
+count(sodio) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "sodio":
+
+HF |> 
+group_by(sodio) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "sodio":
+
+ggplot(HF, aes(x = sodio, color = mortalidad, fill = mortalidad)) +
+  geom_histogram(alpha = 0.8) +
+  labs(title = "Histograma variable Sodio", x = "Sodio", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "sodio"** toma 35 valores distintos.   
+
+Los niveles normales de sodio en sangre se estiman entre 135 y 145 mEq/L. Aquellos niveles inferiores a 135 mEq/L o superiores a 145 mEq/L pueden ser síntoma de haber padecido una insuficiencia cardíaca.  
+
+Poco más del 17.8% de los pacientes registrados han presentado niveles de sodio en sangre anormales.  
+
+```{r eval = TRUE}
+# Análisis de la variable "potasio":
+## Porcentaje de la variable "potasio":
+
+HF |> 
+count(potasio) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "potasio":
+
+HF |> 
+group_by(potasio) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "potasio":
+
+ggplot(HF, aes(x = potasio, color = mortalidad, fill = mortalidad)) +
+  geom_histogram(alpha = 0.8) +
+  labs(title = "Histograma variable Potasio", x = "Potasio", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "potasio"** consta de 114 valores distintos.   
+
+Nuevamente, los niveles normales de potasio en sangre se estiman entre 3.7 y 5.2 mEq/L. Cualquier valor por debajo de 3.7 mEq/L o por encima de 5.2 mEq/L puede provocar alteraciones en la función cardíaca que pueden llevar a la insuficiencia cardíaca.  
+
+En nuestro registro, algo más del 19.4% de los pacientes presentaron niveles anormales.  
+
+```{r eval = TRUE}
+# Análisis de la variable "hemoglobina":
+## Porcentaje de la variable "hemoglobina":
+
+HF |> 
+count(hemoglobina) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "hemoglobina":
+
+HF |> 
+group_by(hemoglobina) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "hemoglobina":
+
+ggplot(HF, aes(x = hemoglobina, color = mortalidad, fill = mortalidad)) +
+  geom_histogram(alpha = 0.8) +
+  labs(title = "Histograma variable Hemoglobina", x = "Hemoglobina", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "hemoglobina"** presenta 169 valores distintos.  
+
+En este caso, los niveles normales de hemoglobina en sangre rondan de 13.2 a 16.6 g/dL en los hombres y de 11.6 a 15 g/dL en las mujeres. Si los niveles son menores a aquellos, puede ser debido al padecimiento de una insuficiencia cardiaca. 
+
+En nuestros datos, algo más de la mitad de los pacientes hombres registrados presentaron unos niveles de hemoglobina en sangre menores a 13.2 g/dL y, aproximadamente el 31.4% de las pacientes mujeres registradas presentaron unos niveles de hemoglobina en sangre menores a 11.6 g/dL.
+
+```{r eval = TRUE}
+# Análisis de la variable "inhibidores_ECA":
+## Porcentaje de la variable "inhibidores_ECA":
+
+HF |> 
+count(inhibidores_ECA, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "inhibidores_ECA":
+
+HF |> 
+group_by(inhibidores_ECA) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "hemoglobina":
+
+ggplot(HF, aes(x = inhibidores_ECA, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable inhibidores_ECA", x = "Inhibidores_ECA", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "inhibidores_ECA"** es binaria.   
+
+A más de la mitad de los pacientes registrados se les suministraron medicamentos inhibidores de la ECA.  
+
+```{r eval = TRUE}
+# Análisis de la variable "betabloqueadores":
+## Porcentaje de la variable "betabloqueadores":
+
+HF |> 
+count(betabloqueadores, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "betabloqueadores":
+
+HF |> 
+group_by(betabloqueadores) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "betabloqueadores":
+
+ggplot(HF, aes(x = betabloqueadores, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Betabloqueadores", x = "Betabloqueadores", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "betabloqueadores"** es binaria.   
+
+Un 35.9% de los pacientes registrados aproximadamente fueron suministrados con betabloqueadores.  
+
+```{r eval = TRUE}
+# Análisis de la variable "antagonistas_receptores_angiotensina_II":
+## Porcentaje de la variable "antagonistas_receptores_angiotensina_II":
+
+HF |> 
+count(antagonistas_receptores_angiotensina_II, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "antagonistas_receptores_angiotensina_II":
+
+HF |> 
+group_by(antagonistas_receptores_angiotensina_II) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "antagonistas_receptores_angiotensina_II":
+
+ggplot(HF, aes(x = antagonistas_receptores_angiotensina_II, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Antagonistas_receptores_angiotensina_II", 
+  x = "Antagonistas_receptores_angiotensina_II", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "antagonistas_receptores_angiotensina_II"** es binaria.  
+
+En este caso, el medicamento fue suministrado al 18.2% de los pacientes registrados.  
+
+```{r eval = TRUE}
+# Análisis de la variable "antagonistas_calcio":
+## Porcentaje de la variable "antagonistas_calcio":
+
+HF |> 
+count(antagonistas_calcio, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "antagonistas_calcio":
+
+HF |> 
+group_by(antagonistas_calcio) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "antagonistas_calcio":
+
+ggplot(HF, aes(x = antagonistas_calcio, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Antagonistas_calcio", x = "Antagonistas_calcio", 
+  y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "antagonistas_calcio"** es binaria.  
+
+Solamente a un 15.8% de los pacientes registrados se les suministraron medicamentos antagonistas del calcio.   
+
+```{r eval = TRUE}
+# Análisis de la variable "antiagregantes":
+## Porcentaje de la variable "antiagregantes":
+
+HF |> 
+count(antiagregantes, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "antiagregantes":
+
+HF |> 
+group_by(antiagregantes) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "antiagregantes":
+
+ggplot(HF, aes(x = antiagregantes, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Antiagregantes", x = "Antiagregantes", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "antiagregantes"** es binaria.   
+
+Los antiagregantes fueron suministrados al 44.5% de los pacientes registrados.   
+
+```{r eval = TRUE}
+# Análisis de la variable "anticoagulantes_orales":
+## Porcentaje de la variable "anticoagulantes_orales":
+
+HF |> 
+count(anticoagulantes_orales, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "anticoagulantes_orales":
+
+HF |> 
+group_by(anticoagulantes_orales) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "anticoagulantes_orales":
+
+ggplot(HF, aes(x = anticoagulantes_orales, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Anticoagulantes_orales", x = "Anticoagulantes_orales", 
+  y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "anticoagulantes_orales"** es binaria.   
+
+Las estadísticas nos muestran que, prácticamente, al 35.5% de los pacientes registrados se les suministraron anticoagulantes orales.   
+
+```{r eval = TRUE}
+# Análisis de la variable "digoxina":
+## Porcentaje de la variable "digoxina":
+
+HF |> 
+count(digoxina, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "digoxina":
+
+HF |> 
+group_by(digoxina) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "digoxina":
+
+ggplot(HF, aes(x = digoxina, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Digoxina", x = "Digoxina", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "digoxina"** es binaria.   
+
+Casi al 30% de los pacientes registrados se les suministró digoxina.   
+
+```{r eval = TRUE}
+# Análisis de la variable "diureticos":
+## Porcentaje de la variable "diureticos":
+
+HF |> 
+count(diureticos, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "diureticos":
+
+HF |> 
+group_by(diureticos) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "diureticos":
+
+ggplot(HF, aes(x = diureticos, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Diureticos", x = "Diureticos", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "diureticos"** es binaria.   
+
+En este caso, al 74% de los pacientes registrados se les suministraron diuréticos.
+
+```{r eval = TRUE}
+# Análisis de la variable "estatinas":
+## Porcentaje de la variable "estatinas":
+
+HF |> 
+count(estatinas, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "estatinas":
+
+HF |> 
+group_by(estatinas) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "estatinas":
+
+ggplot(HF, aes(x = estatinas, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Estatinas", x = "Estatinas", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "estatinas"** es binaria.  
+
+Las estatinas fueron suministradas a algo más del 30.5% de los pacientes registrados.  
+
+```{r eval = TRUE}
+# Análisis de la variable "mononitrato_isosorbida":
+## Porcentaje de la variable "mononitrato_isosorbida":
+
+HF |> 
+count(mononitrato_isosorbida, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "mononitrato_isosorbida":
+
+HF |> 
+group_by(mononitrato_isosorbida) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "mononitrato_isosorbida":
+
+ggplot(HF, aes(x = mononitrato_isosorbida, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Mononitrato_isosorbida", 
+  x = "Mononitrato_isosorbida", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "mononitrato de isosorbida"** es binaria.  
+
+Según los registros, no más del 10% de los pacientes fueron suministrados con mononitrato de isosorbida.   
+
+```{r eval = TRUE}
+# Análisis de la variable "valvulopatias":
+## Porcentaje de la variable "valvulopatias":
+
+HF |> 
+count(valvulopatias, sort = TRUE) |> 
+mutate(porc = 100 * n / sum(n), cumul = cumsum(porc))
+
+## Porcentaje de la variable objetivo agrupando la variable "valvulopatias":
+
+HF |> 
+group_by(valvulopatias) |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+# Gráfico para la variable "valvulopatias":
+
+ggplot(HF, aes(x = valvulopatias, color = mortalidad, fill = mortalidad)) +
+  geom_bar(alpha = 0.8) +
+  labs(title = "Diagrama variable Valvulopatias", 
+  x = "Valvulopatias", y = "Frecuencia") + 
+  theme_minimal()
+
+
+```
+
+
+La **variable "valvulopatias"** es binaria.  
+
+Finalmente, presentaron valvulopatías casi un 30% de los pacientes registrados.  
+
+
+A continuación, se procede a ejecutar un contraste de independencia para tener mayor certeza de si las variables categóricas son dependientes o no de la variable objetivo:  
+
+```{r eval = TRUE}
+# Se ejecuta el contraste de indepencia (test chi-cuadrado):
+
+chisq <- tibble("variable" = HF |> 
+  select(where(is.character)) |> 
+  names(),
+  "p_value" = HF |> 
+  select(where(is.character)) |> 
+  map_dbl(.f = function(x) { chisq.test(HF$mortalidad, x)$p.value}))
+
+chisq |> arrange(desc(p_value))
+
+
+```
+
+**Aunque hay variables con p-valores mayores a 0.05**, que darían evidencias suficientes para decir que son independientes de la variable objetivo, **proponemos no eliminar ninguna variable** con el fin de realizar un modelo lo más fiel posible a todos los datos ofrecidos.  
+
+Posteriormente, se procederá a comprobar posibles problemas de colinealidad entre posibles variables numéricas:   
+
+```{r eval = TRUE}
+# Se ve la colinealidad entre las variables numéricas:
+## Se obtiene la matriz de correlación:
+
+cor_matrix <- HF |> 
+  select(where(is.numeric)) |> 
+  cor() |> 
+  round(2)
+
+cor_matrix
+
+## Se obtiene un gráfico de correlación:
+
+cor_matrix |> 
+corrplot(method = "number", tl.cex = 0.9, number.cex = 0.9, type = "lower")
+
+
+```
+
+
+Según se observa, **no parece existir una correlación alta entre ninguna variable numérica**.  
+
+
+## 2: Submuestreo.
+
+En esta fase, dado que tenemos pocas observaciones, **no vamos a hacer submuestreo**.   
+
+Vamos a determinar el balanceamiento de la variable objetivo:  
+
+```{r eval = TRUE}
+# Vemos el balanceamiento de la variable objetivo:
+
+HF |> 
+count(mortalidad) |> 
+mutate(porc = 100 * n / sum(n))
+
+
+```
+
+
+Vemos que **la variable objetivo está desbalanceada**. Las pocas observaciones de cada clase pueden complicar el tuneado de algunos algoritmos, como la red neuronal.  
+
+
+## 3: Modificación de los datos.
+
+Una vez llevado a cabo el análisis de todas las variables predictoras, se deberán tomar **dos tipos decisiones**:   
+
+* **las que afectan a la base de datos en general**: problemas de codificación o rango, creación de variables en general, variables que no aportan, pasar a factores, etc.   
+
+* **las que afectan a un algoritmo en concreto**: recategorización, tratamiento de ausentes, estandarización, dummyficación, etc.    
+
+En primer lugar, se procede a las **modificaciones estructurales**:  
+
+```{r eval = TRUE}
+# Modificaciones estructurales:
+
+HF <- HF |> 
+  # Conversión de variables de tipo carácter a factor:
+  mutate(across(where(is.character), as_factor))
+
+HF
+
+
+```
+
+En segundo lugar, se va a **definir la receta**:  
+
+```{r eval = TRUE}
+# Receta:
+
+HF_rec <-
+  # Fórmula y datos:
+  recipe(data = HF, mortalidad ~ .) |> 
+  # Recategorización de niveles con menos de 20 observaciones en una categoría:
+  step_other(all_nominal_predictors(), threshold = 20, other = "other") |> 
+  # Aplicación del filtro de correlación a variables numéricas:
+  step_corr(all_numeric_predictors(), threshold = 0.9) |> 
+  # Normalización por rango a las variables numéricas:
+  step_range(all_numeric_predictors()) |> 
+  # Dummyficación de las variables categóricas:
+  step_dummy(all_nominal_predictors()) |> 
+  # Eliminación de las categorías  con menos de 20 observaciones:
+  step_rm(contains("other"))
+
+
+# Comprobación de la receta:
+
+HF_prep <- bake(HF_rec |> prep(), new_data = NULL)
+HF_prep
+
+
+```
+
+
+## 4. Chequeo intuitivo inicial.
+
+Antes de llevar a cabo la selección de variables, vamos a realizar un chequeo intuitivo ejecutando:   
+
+* Un modelo logístico inicial con variables obtenidas con stepwise básico.   
+* Un modelo rf inicial.  
+
+En primer lugar, se procede a obtener las variables del modelo logístico inicial con stepwise básico:   
+
+```{r eval = TRUE}
+# Stepwise básico para obtener las variables del modelo logístico inicial:
+
+full <- glm(mortalidad ~ ., data = HF_prep, family = binomial(link = "logit"))
+null <- glm(mortalidad ~ 1, data = HF_prep, family = binomial(link = "logit"))
+
+metodo_aic <- stepAIC(null, scope = list(upper = full), direction = "both", family = binomial(link = "logit"), 
+  trace = FALSE)
+
+variables_aic <- dput(names(metodo_aic[[1]]))
+
+length(variables_aic)
+
+
+```
+
+
+Una vez tenemos las variables seleccionadas, se entrena el modelo logístico inicial y se saca la matriz de confusión y la curva ROC:   
+
+```{r eval = TRUE}
+# Entrenamos el modelo logístico inicial con las variables seleccionadas del stepwise básico:
+
+set.seed(1234)
+
+modelo_logistica_inicial <- train(mortalidad ~ edad + creatinina + presion_arterial_sistolica + inhibidores_ECA_si + 
+  sodio + crepitantes_no + ingurgitacion_yugular_si + hepatomegalia_si + edemas_no + betabloqueadores_si +
+  valvulopatias_no + digoxina_si , data = HF_prep, method = "glm", trControl = trainControl(method = "cv", number = 4,
+  savePredictions = "all", classProbs = TRUE))
+
+modelo_logistica_inicial
+
+sal_modelo_logistica_inicial <- modelo_logistica_inicial$pred
+
+
+# Matriz de confusión:
+
+confusionMatrix(reference = sal_modelo_logistica_inicial$obs, data = sal_modelo_logistica_inicial$pred, 
+  positive = "Yes")
+
+
+# Curva ROC:
+
+curvaroc_modelo_logistica_inicial <- roc(response = sal_modelo_logistica_inicial$obs, 
+  predictor = sal_modelo_logistica_inicial$Yes)
+
+auc_modelo_logistica_inicial <- curvaroc_modelo_logistica_inicial$auc
+auc_modelo_logistica_inicial
+
+plot(roc(response = sal_modelo_logistica_inicial$obs, predictor = sal_modelo_logistica_inicial$Yes))
+
+
+```
+
+
+En segundo lugar, se entrena el modelo rf inicial, sacando la matriz de confusión y la curva ROC:  
+
+```{r eval = TRUE}
+# Entrenamos el modelo rf inicial con todas las variables:
+
+set.seed(1234)
+
+modelo_rf_inicial <- train(mortalidad ~ ., data = HF_prep, method = "rf", trControl = trainControl(method = "cv",
+  number = 4, savePredictions = "all", classProbs = TRUE), linout = FALSE, ntree = 5000, nodesize = 10, replace = TRUE,
+  importance = TRUE)
+
+modelo_rf_inicial
+
+sal_modelo_rf_inicial <- modelo_rf_inicial$pred
+
+
+# Matriz de confusión:
+
+confusionMatrix(reference = sal_modelo_rf_inicial$obs, data = sal_modelo_rf_inicial$pred, positive = "Yes")
+
+
+# Curva ROC:
+
+curvaroc_modelo_rf_inicial <- roc(response = sal_modelo_rf_inicial$obs, predictor = sal_modelo_rf_inicial$Yes)
+
+auc_modelo_rf_inicial <- curvaroc_modelo_rf_inicial$auc
+auc_modelo_rf_inicial
+
+plot(roc(response = sal_modelo_rf_inicial$obs, predictor = sal_modelo_rf_inicial$Yes))
+
+
+```
+
+
+Como ya se ha comentado, hay 139 observaciones de la clase minoritaria (Yes) de la variable objetivo (17.7% de las observaciones totales) por lo que no se permitirán ni modelos muy complicados ni con muchas variables predictoras.  
+
+En vista a los resultados obtenidos, no merece la pena un algoritmo más complejo, sino que se prefiere la logística.  
+
+Por otro lado, no se aprecia una alta tasa de pacientes fallecidos clasificados correctamente en ninguna de las dos matrices de confusión (la sensibilidad obtenida es bastante baja). Esto puede deberse al alto desbalanceamiento de la variable objetivo o a la falta de buenas variables predictoras, entre otros factores.    
+
+Por todo esto se propondrá cambiar el punto de corte para intentar detectar más pacientes fallecidos correctamente e intentar mejorar nuestro modelo final elegido.   
+
+
+## 5: Selección de variables.
+
+A continuación, se proponen varios métodos de selección de variable:  
+
+```{r eval = TRUE}
+# SBF:
+
+metodo_sbf <- sbf(HF_rec, data = HF, sbfControl = sbfControl(functions = rfSBF, method = "cv", verbose = FALSE))
+
+variables_sbf <- dput(metodo_sbf$optVariables)
+
+length(variables_sbf)
+
+
+```
+
+
+Este método SBF selecciona 11 variables:  
+
+"edad", "presion_arterial_sistolica", "presion_arterial_diastolica", "creatinina", "sodio", "potasio", "hemoglobina", "crepitantes_no", "edemas_no", "inhibidores_ECA_si", "betabloqueadores_si".  
+
+```{r eval = TRUE}
+# RFE:
+
+metodo_rfe <- rfe(HF_rec, data = HF, sizes = c(1:27), rfeControl = rfeControl(functions = rfFuncs, 
+  method = "cv", number = 10))
+
+
+# Resultados en gráfico:
+
+resultados_rfe <- as.data.frame(metodo_rfe$results)
+
+ggplot(resultados_rfe, aes(y = Accuracy, x = Variables)) + 
+  geom_point() +
+  geom_line() + 
+  scale_y_continuous(breaks = resultados_rfe$Accuracy) + 
+  scale_x_continuous(breaks = resultados_rfe$Variables) + 
+  labs(title = "RFE")
+
+
+# Variables seleccionadas:
+
+variables_rfe <- dput(metodo_rfe$optVariables)
+
+length(variables_rfe)
+
+
+```
+
+
+Este método RFE seleccionaba más variables, pero tras la visualización de los resultados en gráfico seleccionamos las siguientes: 
+
+"edad", "creatinina", "presion_arterial_sistolica", "presion_arterial_diastolica", "sodio", "betabloqueadores_si", "hemoglobina", "anticoagulantes_orales_si".   
+
+```{r eval = TRUE}
+# AIC:
+
+full <- glm(mortalidad ~ ., data = HF_prep, family = binomial(link = "logit"))
+null <- glm(mortalidad ~ 1, data = HF_prep, family = binomial(link = "logit"))
+
+metodo_aic <- stepAIC(null, scope = list(upper = full), direction = "both", family = binomial(link = "logit"), 
+  trace = FALSE)
+
+variables_aic <- dput(names(metodo_aic[[1]]))
+
+length(variables_aic)
+
+
+```
+
+
+Este método AIC selecciona 12 variables:
+
+"edad", "creatinina", "presion_arterial_sistolica", "inhibidores_ECA_si", "sodio", "crepitantes_no", "ingurgitacion_yugular_si", "hepatomegalia_si", "edemas_no", "betabloqueadores_si", "valvulopatias_no", "digoxina_si".  
+
+```{r eval = TRUE}
+# BIC, se pone k = log(n) en stepAIC, en este caso n = 786 observaciones:
+
+full <- glm(mortalidad ~ ., data = HF_prep, family = binomial(link = "logit"))
+null <- glm(mortalidad ~ 1, data = HF_prep, family = binomial(link = "logit"))
+
+metodo_bic <- stepAIC(null, scope = list(upper = full), direction = "both", family = binomial(link = "logit"), 
+  trace = FALSE, k = 6.67)
+
+variables_bic <- dput(names(metodo_bic[[1]]))
+
+length(variables_bic)
+
+
+```
+
+
+Este método BIC selecciona 3 variables:
+
+"edad", "creatinina", "presion_arterial_sistolica".  
+
+```{r eval = TRUE}
+# Boruta:
+
+out.boruta <- Boruta(mortalidad ~ ., data = HF_prep)
+
+metodo_boruta <- data.frame(out.boruta$finalDecision)
+
+metodo_boruta_2 <- metodo_boruta[which(metodo_boruta$out.boruta.finalDecision == "Confirmed"), , drop = FALSE]
+
+variables_boruta <- dput(row.names(metodo_boruta_2))
+
+length(variables_boruta)
+
+
+```
+
+
+Este método Boruta selecciona 4 variables:
+
+"edad", "presion_arterial_sistolica", "creatinina", "sodio".   
+
+```{r eval = TRUE}
+# MMPC:
+
+metodo_mmpc <- MMPC("mortalidad", dataset = as.data.frame(HF_prep), max_k = 3, hash = TRUE, 
+  test = "testIndLogistic")
+
+variables_mmpc <- dput(names(HF_prep[, c(metodo_mmpc@selectedVars)]))
+
+length(variables_mmpc)
+
+
+```
+
+
+Este método MMPC selecciona 6 variables:
+
+"edad", "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si".   
+
+```{r eval = TRUE}
+# SES:
+
+metodo_ses <- SES("mortalidad", data = as.data.frame(HF_prep), max_k = 3, hash = TRUE, 
+  test = "testIndLogistic")
+
+variables_ses <- dput(names(HF_prep[, c(metodo_ses@selectedVars)]))
+
+length(variables_ses)
+
+
+```
+
+
+Este método SES selecciona también las mismas 6 variables:
+
+"edad", "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si".   
+
+```{r eval = TRUE}
+# AIC repetido:
+
+source("funcion steprepetido binaria.R")
+
+metodo_aic_rep <- steprepetidobinaria(data = HF_prep, vardep = "mortalidad", listconti = c("edad",                          "presion_arterial_sistolica", "presion_arterial_diastolica", "creatinina", "sodio", "potasio", "hemoglobina",             "sexo_mujer", "cardiopatia_isquemica_si", "fibrilacion_auricular_si", "crepitantes_no", "tercer_tono_cardiaco_si",        "ingurgitacion_yugular_si", "hepatomegalia_si", "reflujo_hepatoyugular_si", "edemas_no", "inhibidores_ECA_si",            "betabloqueadores_si", "antagonistas_receptores_angiotensina_II_no", "antagonistas_calcio_si", "antiagregantes_si",       "anticoagulantes_orales_si", "digoxina_si", "diureticos_si", "estatinas_si", "mononitrato_isosorbida_si",                 "valvulopatias_no"), sinicio = 12345, sfinal = 12385, porcen = 0.8, criterio = "AIC")
+
+tabla <- metodo_aic_rep[[1]]
+
+variables_aic_rep <- dput(metodo_aic_rep[[2]][[1]])
+
+length(variables_aic_rep)
+
+
+```
+
+
+Este método AIC repetido selecciona 10 variables:
+
+"edad", "creatinina", "inhibidores_ECA_si", "ingurgitacion_yugular_si", "presion_arterial_sistolica", "crepitantes_no", "estatinas_si", "edemas_no", "hepatomegalia_si", "sodio".
+
+```{r eval = TRUE}
+# BIC repetido:
+
+metodo_bic_rep <- steprepetidobinaria(data = HF_prep, vardep = "mortalidad", listconti = c("edad",                          "presion_arterial_sistolica", "presion_arterial_diastolica", "creatinina", "sodio", "potasio", "hemoglobina",             "sexo_mujer", "cardiopatia_isquemica_si", "fibrilacion_auricular_si", "crepitantes_no", "tercer_tono_cardiaco_si",        "ingurgitacion_yugular_si", "hepatomegalia_si", "reflujo_hepatoyugular_si", "edemas_no", "inhibidores_ECA_si",            "betabloqueadores_si", "antagonistas_receptores_angiotensina_II_no", "antagonistas_calcio_si", "antiagregantes_si",       "anticoagulantes_orales_si", "digoxina_si", "diureticos_si", "estatinas_si", "mononitrato_isosorbida_si",                 "valvulopatias_no"), sinicio = 12345, sfinal = 12385, porcen = 0.8,
+  criterio = "BIC")
+
+tabla <- metodo_bic_rep[[1]]
+
+variables_bic_rep <- dput(metodo_bic_rep[[2]][[1]])
+
+length(variables_bic_rep)
+
+variables_bic_rep2 <- dput(metodo_bic_rep[[2]][[2]])
+
+length(variables_bic_rep2)
+
+
+```
+
+Este método BIC repetido selecciona 2 variables:   
+
+"edad", "creatinina".   
+
+Este método BIC repetido 2 selecciona 3 variables:
+
+"edad", "creatinina", "presion_arterial_sistolica".   
+
+
+## 6: Comparación de modelos.
+
+Con cada método de selección de variables se obtiene un modelo. Se comparan estos modelos para ver cuál es el más adecuado mediante validación cruzada repetida. Los resultados se reflejan en el boxplot siguiente:   
+
+```{r eval = TRUE}
+# Comparación de modelos vía validación cruzada repetida:  
+
+source("cruzadas avnnet y log binaria.R")
+detach("package:MXM")
+detach("package:Boruta")
+
+## Modelo Logística (SBF):
+
+modelo_logistica_sbf <- cruzadalogistica(data = as.data.frame(HF_prep), vardep = "mortalidad", listconti = c("edad",        "presion_arterial_sistolica", "presion_arterial_diastolica", "creatinina", "sodio", "potasio", "hemoglobina",             "crepitantes_no", "edemas_no", "inhibidores_ECA_si", "betabloqueadores_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10)
+
+modelo_logistica_sbf$modelo = "logist_sbf"
+
+## Modelo Logística (RFE):
+
+modelo_logistica_rfe <- cruzadalogistica(data = as.data.frame(HF_prep), vardep = "mortalidad", listconti = c("edad",        "creatinina", "presion_arterial_sistolica", "presion_arterial_diastolica", "sodio", "betabloqueadores_si",                "hemoglobina", "anticoagulantes_orales_si"), listclass = c(""), grupos = 4, sinicio = 1234, repe = 10)
+
+modelo_logistica_rfe$modelo = "logist_rfe"
+
+## Modelo Logística (AIC):
+
+modelo_logistica_aic <- cruzadalogistica(data = as.data.frame(HF_prep), vardep = "mortalidad", listconti = c("edad",        "creatinina", "presion_arterial_sistolica", "inhibidores_ECA_si", "sodio", "crepitantes_no", "ingurgitacion_yugular_si",   "hepatomegalia_si", "edemas_no", "betabloqueadores_si", "valvulopatias_no", "digoxina_si"), listclass = c(""),
+  grupos = 4, sinicio = 1234, repe = 10)
+
+modelo_logistica_aic$modelo = "logist_aic"
+
+## Modelo Logística (BIC):
+
+modelo_logistica_bic <- cruzadalogistica(data = as.data.frame(HF_prep), vardep = "mortalidad", listconti = c("edad",        "creatinina", "presion_arterial_sistolica"), listclass = c(""), grupos = 4, sinicio = 1234, repe = 10)
+
+modelo_logistica_bic$modelo = "logist_bic"
+
+## Modelo Logistica (Boruta):
+
+modelo_logistica_boruta <- cruzadalogistica(data = as.data.frame(HF_prep), vardep = "mortalidad", listconti = c("edad",     "presion_arterial_sistolica", "creatinina", "sodio"), listclass = c(""), grupos = 4, sinicio = 1234, repe = 10)
+
+modelo_logistica_boruta$modelo = "logist_boruta"
+
+## Modelo Logística (MMPC):
+
+modelo_logistica_mmpc <- cruzadalogistica(data = as.data.frame(HF_prep), vardep = "mortalidad", listconti = c("edad",       "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"), listclass = c(""),
+  grupos = 4, sinicio = 1234, repe = 10)
+
+modelo_logistica_mmpc$modelo = "logist_mmpc"
+
+## Modelo Logística (AICrep):
+
+modelo_logistica_aic_rep <- cruzadalogistica(data = as.data.frame(HF_prep), vardep = "mortalidad", listconti = c("edad",    "creatinina", "inhibidores_ECA_si", "ingurgitacion_yugular_si", "presion_arterial_sistolica", "crepitantes_no",           "estatinas_si", "edemas_no", "hepatomegalia_si", "sodio"), listclass = c(""), grupos = 4, sinicio = 1234, repe = 10)
+
+modelo_logistica_aic_rep$modelo = "logist_aic_rep"
+
+## Modelo Logística (BICrep):
+
+modelo_logistica_bic_rep <- cruzadalogistica(data = as.data.frame(HF_prep), vardep = "mortalidad", listconti = c("edad",    "creatinina"), listclass = c(""), grupos = 4, sinicio = 1234, repe = 10)
+
+modelo_logistica_bic_rep$modelo = "logist_bic_rep"
+
+
+# Gráficos boxplot:
+
+union <- rbind(modelo_logistica_sbf, modelo_logistica_rfe, modelo_logistica_aic, modelo_logistica_bic,              modelo_logistica_boruta, modelo_logistica_mmpc, modelo_logistica_aic_rep, modelo_logistica_bic_rep)
+
+par(cex.axis = 0.7, las = 2)
+boxplot(data = union, col = "pink", tasa ~ modelo, main = "TASA DE FALLOS")
+
+par(cex.axis = 0.7, las = 2)
+boxplot(data = union, col = "pink", auc ~ modelo, main = "AUC")
+
+
+```
+
+
+Con respecto al **primer gráfico boxplot**: 
+
+* El modelo logist_mmpc es el que menor tasa de fallos presenta en sus predicciones.
+
+* No obstante, en términos de varianza, los modelos logist_aic_rep y logist_rfe son los que presentan menor varianza de los resultados.   
+
+* Se observa que el modelo con menor número de variables seleccionadas es logist_bic_rep. Este modelo es de los que mayor tasa de fallos presenta en sus predicciones.   
+
+
+En el **segundo gráfico boxplot**:
+
+* El modelo logist_aic_rep es el que mayor AUC presenta.  
+
+* Sin embargo, el modelo logist_bic_rep es el que presenta menor varianza de los resultados.  
+
+* El modelo con menor número de variables seleccionadas es logist_bic_rep. Este modelo tiene un AUC menor que otros.   
+
+
+Con todo esto y en vista de las pocas observaciones de la clase minoritaria de la variable objetivo, vamos a considerar el **modelo logist_mmpc** como **el modelo de regresión logística más tentativo**, ya que, en conjunto, presentan las características más apropiadas.   
+
+
+## 7: Tuneado de redes neuronales (con método MMPC).
+
+Con las características de nuestro modelo Logística (MMPC), se procede a tunear varias redes neuronales:   
+
+* 6 variables.   
+* 139 obs en la clase de interés (Yes).  
+* 22 obs / parámetro (ya que tenemos 6 variables).   
+
+Entonces, se determinan los parámetros máximos a estimar según la expresión: 139 / 22 ≈ 6 parámetros max.   
+
+Ahora, mediante la fórmula siguiente se calculan cuántos nodos máximos tendrá cada red neuronal:   
+
+6 = h * (k + 1) + h + 1   
+
+* h es el número máximo de nodos.  
+* k es el número de variables.   
+
+Esto implica: h = 5 / (k + 2) = 5 / 8 ≈ 1 nodos max.   
+
+Sin embargo, se pondrán 5 nodos, que es un mínimo aceptable para una red. Con lo que queda:  
+
+* 5 nodos max.  
+* 41 parámetros max.  
+* 3 obs / parámetro.   
+
+Por esta razón no cabe tunear el número de nodos. No hay margen y un número más alto sobreajustará.  
+
+Llegados a este punto, se procede al tuneado de redes:   
+
+```{r eval = TRUE}
+# Tuneado de parámetros maxit y decay en redes con las variables seleccionadas del método MMPC:
+
+set.seed(1234)
+
+completo <- data.frame()
+listaiter <- c(50, 100, 200, 500, 1000, 2000, 3000)
+
+for (iter in listaiter) {
+  rednnet <- train(mortalidad ~ edad + presion_arterial_sistolica + creatinina + sodio + crepitantes_no +
+  inhibidores_ECA_si, data = HF_prep, method = "avNNet", linout = FALSE, maxit = iter, 
+  trControl = trainControl(method = "repeatedcv", number = 4, repeats = 5, savePredictions = "all", classProbs = TRUE),
+  tuneGrid = expand.grid(size = 5, decay = c(0.1, 0.01, 0.001), bag = FALSE), trace = FALSE)
+  # Adicción de la columna del parametro de iteraciones:
+  rednnet$results$itera <- iter
+  # Incorporación de los resultados:
+  completo <- rbind(completo, rednnet$results)
+  
+}
+
+completo <- completo[order(completo$Accuracy), ]
+
+
+# Gráfico de puntos:
+
+ggplot(completo, aes(x = factor(itera), y = Accuracy, color = factor(decay), pch = factor(size))) +
+  geom_point(position = position_dodge(width = 0.5), size = 3)
+
+
+```
+
+
+A la vista del gráfico de puntos, llega un momento en que la red se sobreajusta, por lo que es necesario early stopping.   
+
+En nuestro caso, se propone dejar el tuneado en **maxit = 100, decay = 0.01**.   
+
+
+## 8: Comparación de modelos con la mejor red.
+
+En este apartado, se añade la mejor red neuronal a la comparativa con los mejores modelos de regresión logística:    
+
+```{r eval = TRUE}
+## Modelo Red neuronal:
+
+modelo_rednnet <- cruzadaavnnetbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad",                             "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"), listclass = c(""),
+  grupos = 4, sinicio = 1234, repe = 10, repeticiones = 5, itera = 100, size = 5, decay = 0.01)
+
+modelo_rednnet$modelo = "rednnet"
+
+
+# Gráficos boxplot:
+
+union2 <- rbind(modelo_logistica_mmpc, modelo_rednnet)
+
+par(cex.axis = 0.9)
+boxplot(data = union2, col = "pink", tasa ~ modelo, main = "TASA DE FALLOS")
+
+par(cex.axis = 0.9)
+boxplot(data = union2, col = "pink", auc ~ modelo, main = "AUC") 
+
+
+```
+
+
+Observando el **primer gráfico boxplot**:  
+
+* El modelo logist_mmpc es el que menor tasa de fallos presenta en sus predicciones.  
+
+* En términos de varianza, es el mismo modelo el que presenta una menor varianza de los resultados.   
+
+
+Si nos fijamos en el **segundo gráfico boxplot**:  
+
+* El modelo logist_mmpc es el que mayor AUC presenta.   
+
+* Además, este mismo modelo logist_mmpc presenta una varianza de los resultados menor.   
+
+
+## 9: Tuneado de Bagging y Rf.
+
+Estos son otros algoritmos de clasificación.   
+
+Procedemos al tuneado de parámetros de estos algoritmos, tales como mtry (sólo para 'Rf') y sampsize, así como a la toma de decisión del mínimo ntree.   
+
+Empezamos por tuneado de mtry (sólo para 'Rf'):   
+
+```{r eval = TRUE}
+# Tuneado del parámetro mtry en Rf con todas las variables:
+
+set.seed(1234)
+
+rf <- train(mortalidad ~ ., data = HF_prep, method = "rf", trControl = trainControl(method = "repeatedcv", 
+  number = 4, repeats = 5, savePredictions = "all", classProbs = TRUE), 
+  tuneGrid = expand.grid(mtry = c(2, 3, 4, 6, 8, 10, 11, 12, 15, 18, 27)), linout = FALSE, ntree = 5000, nodesize = 10, 
+  replace = TRUE, importance = TRUE)
+
+rf
+
+
+# Importancia de variables Bagging y Rf:
+
+final <- rf$finalModel
+tabla <- as.data.frame(importance(final))
+tabla <- tabla[order(- tabla$MeanDecreaseAccuracy), ]
+tabla
+
+ggplot(tabla, aes(x = reorder(row.names(tabla), - MeanDecreaseAccuracy), y = MeanDecreaseAccuracy)) +
+  geom_bar(stat = "identity", color = "black", fill = "grey", alpha = 0.8) +
+  labs(title = "Importancia de variables (Bagging y Rf)", x = "Variables") +
+  theme_minimal() +
+  geom_text(label = row.names(tabla), hjust = 0, angle = 90) +
+  theme(axis.text.x = element_blank())
+
+
+```
+
+
+Este orden de importancia de variables puede servir de base para la selección de variables de los algoritmos 'Bagging' y 'Rf'. Por esta razón, y en base a las variables que más bajan el Accuracy si no se usan, seleccionaremos las siguientes variables:   
+
+"edad", "creatinina", "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si".  
+
+Esto se traduce en mtry = 6 para 'Bagging', ya que seleccionamos 6 variables.   
+
+
+Volvemos a repetir el proceso con las variables seleccionadas:    
+
+```{r eval = TRUE}
+# Tuneado del parámetro mtry en Rf con las variables seleccionadas:
+
+set.seed(1234)
+
+rf_2 <- train(mortalidad ~ edad + creatinina + presion_arterial_sistolica + sodio + hemoglobina + inhibidores_ECA_si,
+  data = HF_prep, method = "rf", trControl = trainControl(method = "repeatedcv", number = 4, repeats = 5, 
+  savePredictions = "all", classProbs = TRUE), tuneGrid = expand.grid(mtry = c(2, 3, 4, 6)),
+  linout = FALSE, ntree = 5000, nodesize = 10, replace = TRUE, importance = TRUE)
+
+rf_2
+
+
+```
+
+
+Nos quedamos con mtry = 4 para 'Rf', para establecer un número oportuno de variables en cada árbol generado.   
+
+En siguiente lugar, vamos a decidir el mínimo número de ntree para 'Bagging':
+
+```{r eval = TRUE}
+# Para ello ploteamos el error OOB a medida que avanzan las iteraciones:
+
+set.seed(1234)
+
+baggingbis <- randomForest(mortalidad ~ edad + creatinina + presion_arterial_sistolica + sodio + hemoglobina +
+  inhibidores_ECA_si, data = HF_prep, mtry = 6, ntree = 5000, sampsize = 300, nodesize = 10, replace = TRUE)
+
+ggplot(as.data.frame(baggingbis$err.rate), aes(x = seq(1, 5000), y = OOB)) +
+  geom_point(color = "black", alpha = 0.8) +
+  labs(title = "Tasa de error en función del parámetro ntree (Bagging)", x = "ntree", y = "Tasa de error") +
+  theme_minimal()
+
+
+```
+
+
+Se observa que, aproximadamente, con ntree = 300 se obtiene un error menor en las predicciones. Por lo que se decide dejar este mínimo número de ntree para 'Bagging'.   
+
+
+A continuación, se tunea el parámetro sampsize en 'Bagging' según:
+
+* 4 grupos.  
+* 786 observaciones.   
+* (3/4) * 786 = 589  -- max valor del parámetro sampsize (que prueba caret por defecto).    
+
+Entonces:
+
+```{r eval = TRUE}
+# Comparación de modelos vía validación cruzada repetida:  
+
+source("cruzada rf binaria.R")
+
+## Modelo Bagging:
+
+modelo_bagging <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                   "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 6, ntree = 300, replace = TRUE, sampsize = 50)
+
+modelo_bagging$modelo = "bagging"
+
+## Modelo Bagging 2:
+
+modelo_bagging_2 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                 "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""),grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 6, ntree = 300, replace = TRUE, sampsize = 100)
+
+modelo_bagging_2$modelo = "bagging_2"
+
+## Modelo Bagging 3:
+
+modelo_bagging_3 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                 "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 6, ntree = 300, replace = TRUE, sampsize = 150)
+
+modelo_bagging_3$modelo = "bagging_3"
+
+## Modelo Bagging 4:
+
+modelo_bagging_4 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                 "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 6, ntree = 300, replace = TRUE, sampsize = 200)
+
+modelo_bagging_4$modelo = "bagging_4"
+
+## Modelo Bagging 5:
+
+modelo_bagging_5 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                 "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 6, ntree = 300, replace = TRUE, sampsize = 300)
+
+modelo_bagging_5$modelo = "bagging_5"
+
+## Modelo Bagging 6:
+
+modelo_bagging_6 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                 "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 6, ntree = 300, replace = TRUE, sampsize = 400)
+
+modelo_bagging_6$modelo = "bagging_6"
+
+## Modelo Bagging 7:
+
+modelo_bagging_7 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                 "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 6, ntree = 300, replace = TRUE, sampsize = 500)
+
+modelo_bagging_7$modelo = "bagging_7"
+
+## Modelo Bagging BASE:
+
+modelo_bagging_base <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",              "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 6, ntree = 300, replace = TRUE)
+
+modelo_bagging_base$modelo = "bagging_base"
+
+
+# Gráficos boxplot:
+
+union3 <- rbind(modelo_bagging, modelo_bagging_2, modelo_bagging_3, modelo_bagging_4, modelo_bagging_5,
+  modelo_bagging_6, modelo_bagging_7, modelo_bagging_base)
+
+par(cex.axis = 0.6)
+boxplot(data = union3, col = "pink", tasa ~ modelo, main = "TASA DE FALLOS")
+
+par(cex.axis = 0.6)
+boxplot(data = union3, col = "pink", auc ~ modelo, main = "AUC")
+
+
+```
+
+
+Nos quedamos con **mtry = 6, ntree = 300 y sampsize = 50 para 'Bagging'** ya que es el modelo que mejor equilibrio establece entre una baja tasa de fallos, un buen AUC y una menor varianza de los resultados. Es decir, elegimos el **modelo bagging**.   
+
+
+Por otro lado, decidamos el mínimo número de ntree para 'Rf':  
+
+```{r eval = TRUE}
+# Para ello ploteamos el error OOB a medida que avanzan las iteraciones:
+
+set.seed(1234)
+
+rfbis <- randomForest(mortalidad ~ edad + creatinina + presion_arterial_sistolica + sodio + hemoglobina +
+  inhibidores_ECA_si, data = HF_prep, mtry = 4, ntree = 5000, sampsize = 300, nodesize = 10, replace = TRUE)
+
+ggplot(as.data.frame(rfbis$err.rate), aes(x = seq(1, 5000), y = OOB)) +
+  geom_point(color = "black", alpha = 0.8) +
+  labs(title = "Tasa de error en función del parámetro ntree (Rf)", x = "ntree", y = "Tasa de error") +
+  theme_minimal()
+
+
+```
+
+
+En este caso, con ntree = 200 se obtiene un error menor en las predicciones. Por lo que se decide dejar este mínimo número de ntree para 'Rf'.  
+
+
+A continuación, se tunea el parámetro sampsize en 'Rf' según:
+
+* 4 grupos.
+* 786 observaciones.
+* (3/4) * 786 = 589  -- max valor del parámetro sampsize (que prueba caret por defecto).
+
+Entonces:
+
+```{r eval = TRUE}
+# Comparación de modelos vía validación cruzada repetida:  
+## Modelo Rf:
+
+modelo_rf <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                        "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 4, ntree = 200, replace = TRUE, sampsize = 50)
+
+modelo_rf$modelo = "rf"
+
+## Modelo Rf 2:
+
+modelo_rf_2 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                      "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 4, ntree = 200, replace = TRUE, sampsize = 100)
+
+modelo_rf_2$modelo = "rf_2"
+
+## Modelo Rf 3:
+
+modelo_rf_3 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                      "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 4, ntree = 200, replace = TRUE, sampsize = 150)
+
+modelo_rf_3$modelo = "rf_3"
+
+## Modelo Rf 4:
+
+modelo_rf_4 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                      "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 4, ntree = 200, replace = TRUE, sampsize = 200)
+
+modelo_rf_4$modelo = "rf_4"
+
+## Modelo Rf 5:
+
+modelo_rf_5 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                      "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 4, ntree = 200, replace = TRUE, sampsize = 300)
+
+modelo_rf_5$modelo = "rf_5"
+
+## Modelo Rf 6:
+
+modelo_rf_6 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                      "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 4, ntree = 200, replace = TRUE, sampsize = 400)
+
+modelo_rf_6$modelo = "rf_6"
+
+## Modelo Rf 7:
+
+modelo_rf_7 <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                      "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 4, ntree = 200, replace = TRUE, sampsize = 500)
+
+modelo_rf_7$modelo = "rf_7"
+
+## Modelo Rf BASE:
+
+modelo_rf_base <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                   "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 4, ntree = 200, replace = TRUE)
+
+modelo_rf_base$modelo = "rf_base"
+
+
+# Gráficos boxplot:
+
+union4 <- rbind(modelo_rf, modelo_rf_2, modelo_rf_3, modelo_rf_4, modelo_rf_5, modelo_rf_6, modelo_rf_7,
+  modelo_rf_base)
+
+par(cex.axis = 0.9)
+boxplot(data = union4, col = "pink", tasa ~ modelo, main = "TASA DE FALLOS")
+
+par(cex.axis = 0.9)
+boxplot(data = union4, col = "pink", auc ~ modelo, main = "AUC")
+
+
+```
+
+Nos quedamos con **mtry = 4, ntree = 200 y sampsize = 50 para 'Rf'**, puesto que, en conjunto, es el modelo que mejores características presenta en relación a la tasa de fallos, AUC y varianza de los resultados. Es decir, se elige el **modelo rf**.  
+
+
+## 10: Comparación de modelos con Bagging y Random forest.
+
+En este apartado, se añaden el **modelo bagging** y el **modelo rf** a la comparativa con el resto de modelos:   
+
+```{r eval = TRUE}
+# Gráficos boxplot:
+
+union5 <- rbind(modelo_logistica_mmpc, modelo_rednnet, modelo_bagging, modelo_rf)
+
+par(cex.axis = 0.9)
+boxplot(data = union5, col = "pink", tasa ~ modelo, main = "TASA DE FALLOS")
+
+par(cex.axis = 0.9)
+boxplot(data = union5, col = "pink", auc ~ modelo, main = "AUC") 
+
+
+```
+
+
+Observando el **primer gráfico boxplot**:  
+
+* El modelo logist_mmpc es el que menor tasa de fallos presenta en sus predicciones.  
+
+* A simple vista, son los modelos logist_mmpc y rf los que presentan menor varianza de los resultados.   
+ 
+
+Si nos fijamos en el **segundo gráfico boxplot**:  
+
+* Los modelos logist_mmpc y rf son los que mayor AUC presentan.   
+
+* No obstante, es el modelo bagging el que presenta una menor varianza de los resultados.   
+
+
+## 11: Tuneado de Gbm.
+
+Este es otro algoritmo de clasificación.   
+
+Procedemos al tuneado de parámetros de este algoritmo, tales como bag.fraction, shrinkage, n.minobsinnode y n.trees.   
+
+En relación al parámetro bag.fraction lo quedaremos en bag.fraction = 1 ya que tenemos pocas observaciones y nos conviene que nuestro modelo aprenda de las máximas observaciones posibles que sirven de entrenamiento.
+
+Continuamos por tuneado de shrinkage, n.minobsinnode y n.trees:  
+
+```{r eval = TRUE}
+# Tuneado de parámetros shrinkage, n.minobsinnode y n.trees en Gbm con todas las variables:
+
+set.seed(1234)
+
+gbm <- train(mortalidad ~ ., data = HF_prep, method = "gbm", trControl = trainControl(method = "repeatedcv",
+  number = 4, repeats = 5, savePredictions = "all", classProbs = TRUE), 
+  tuneGrid = expand.grid(shrinkage = c(0.001, 0.01, 0.03, 0.05, 0.1), n.minobsinnode = c(5, 10, 20),
+  n.trees = c(50, 75, 100, 200), interaction.depth = 2), distribution = "bernoulli", bag.fraction = 1, 
+  verbose = FALSE)
+
+gbm
+
+plot(gbm)
+
+
+# Importancia de variables Gbm:
+
+tabla <- summary(gbm)
+tabla
+
+ggplot(tabla, aes(x = reorder(row.names(tabla), - rel.inf), y = rel.inf)) +
+  geom_bar(stat = "identity", color = "black", fill = "grey", alpha = 0.8) +
+  labs(title = "Importancia de variables (Gbm)", x = "Variables", y = "Influencia Relativa") +
+  theme_minimal() +
+  geom_text(label = row.names(tabla), hjust = 0, angle = 90) +
+  theme(axis.text.x = element_blank())
+
+
+```
+
+
+Este orden de importancia de variables puede servir de base para la selección de variables del algoritmo 'Gbm'. Por esta razón, y en base a las variables que más información relacionada con la variable objetivo presentan, seleccionaremos las siguientes variables:  
+
+"edad", "creatinina", "presion_arterial_sistolica", "sodio".   
+
+
+Volvemos a repetir el proceso con las variables seleccionadas:   
+
+```{r eval = TRUE}
+# Tuneado de parámetros shrinkage, n.minobsinnode y n.trees en Gbm con las variables seleccionadas:
+
+set.seed(1234)
+
+gbm_2 <- train(mortalidad ~ edad + creatinina + presion_arterial_sistolica + sodio, data = HF_prep, method = "gbm", 
+  trControl = trainControl(method = "repeatedcv", number = 4, repeats = 5, savePredictions = "all", 
+  classProbs = TRUE), tuneGrid = expand.grid(shrinkage = c(0.001, 0.01, 0.03, 0.05, 0.1), 
+  n.minobsinnode = c(5, 10, 20), n.trees = c(50, 75, 100, 200), interaction.depth = 2), 
+  distribution = "bernoulli", bag.fraction = 1, verbose = FALSE)
+
+gbm_2
+
+plot(gbm_2)
+
+
+```
+
+
+Aunque el entrenamiento nos ofrece como parámetros óptimos shrinkage = 0.05 y n.minobsinnode = 10, si miramos las gráficas obtenidas, parece más fiable elegir los parámetros shrinkage = 0.05 y n.minobsinnode = 20.   
+
+
+Vamos a hacer estudio de Early stopping para evitar un posible sobreajuste del parámetro n.trees:  
+
+```{r eval = TRUE}
+# Estudio de Early stopping:
+
+set.seed(1234)
+
+## Fijamos los parámetros shrinkage y n.minobsinnode para ver como evoluciona en función del parámetro n.trees:
+
+gbm_3 <- train(mortalidad ~ edad + creatinina + presion_arterial_sistolica + sodio, data = HF_prep, method = "gbm", 
+  trControl = trainControl(method = "repeatedcv", number = 4, repeats = 5, savePredictions = "all", classProbs = TRUE),
+  tuneGrid = expand.grid(shrinkage = 0.05, n.minobsinnode = 20, n.trees = c(50, 75, 100, 200, 300, 500, 800, 1000, 1200),
+  interaction.depth = 2), distribution = "bernoulli", bag.fraction = 1, verbose = FALSE)
+
+gbm_3
+
+ggplot(gbm_3$results, aes(x = n.trees, y = Accuracy)) +
+  geom_line(color = "black", alpha = 0.8) +
+  geom_point(color = "black", alpha = 0.8) +
+  labs(title = "Accuracy en función del parámetro n.trees (Gbm)", x = "n.trees", y = "Accuracy") +
+  theme_minimal()
+
+
+```
+
+
+En vista de los resultados, finalmente nos quedamos con **shrinkage = 0.05, n.minobsinnode = 20 y n.trees = 75 para 'Gbm'**.
+
+
+## 12: Comparación de modelos con Gbm.
+
+En este apartado, se añade el modelo 'Gbm' a la comparativa con el resto de modelos:   
+
+```{r eval = TRUE}
+# Comparación de modelos vía validación cruzada repetida:  
+
+source ("cruzada gbm binaria.R")
+
+## Modelo Gbm:
+
+modelo_gbm <- cruzadagbmbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                      "presion_arterial_sistolica", "sodio"), listclass = c(""), grupos = 4, sinicio = 1234, repe = 10, shrinkage = 0.05,
+  n.minobsinnode = 20, n.trees = 75, interaction.depth = 2)
+
+modelo_gbm$modelo = "gbm"
+
+
+# Gráficos boxplot:
+
+union6 <- rbind(modelo_logistica_mmpc, modelo_rednnet, modelo_bagging, modelo_rf, modelo_gbm)
+
+par(cex.axis = 0.9)
+boxplot(data = union6, col = "pink", tasa ~ modelo, main = "TASA DE FALLOS")
+
+par(cex.axis = 0.9)
+boxplot(data = union6, col = "pink", auc ~ modelo, main = "AUC") 
+
+
+```
+
+
+Observando el **primer gráfico boxplot**:  
+
+* El modelo gbm es el que menor tasa de fallos presenta en sus predicciones.   
+
+* En términos de varianza, los modelos logist_mmpc, rf y gbm son los que presentan menor varianza de los resultados.   
+
+
+Si nos fijamos en el **segundo gráfico boxplot**:  
+
+* Los modelos logist_mmpc y rf son los que mayor AUC presentan.   
+
+* Sin embargo, el modelo bagging es el que presenta una menor varianza de los resultados.   
+
+* El modelo con menor número de variables seleccionadas es gbm. Este modelo tiene un AUC menor que otros.   
+
+
+## 13: Tuneado de XGboost.
+
+Otro algoritmo de clasificación.   
+
+Procedemos al tuneado de parámetros de este algoritmo, tales como min_child_weight, eta y nrounds:  
+
+```{r eval = TRUE}
+# Tuneado de parámetros min_child_weight, eta y nrounds en XGboost con todas las variables: 
+
+set.seed(1234)
+
+xgbm <- train(mortalidad ~ ., data = HF_prep, method = "xgbTree", trControl = trainControl(method = "repeatedcv",
+  number = 4, repeats = 5, savePredictions = "all", classProbs = TRUE), 
+  tuneGrid = expand.grid(min_child_weight = c(5, 10, 20), eta = c(0.001, 0.01, 0.03, 0.05, 0.1), 
+  nrounds = c(50, 100, 500, 1000), max_depth = 6, gamma = 0, colsample_bytree = 1, subsample = 1), 
+  verbose = FALSE)
+
+xgbm
+
+plot(xgbm)
+
+
+# Importancia de variables XGBoost:
+
+tabla <- varImp(xgbm)$importance
+tabla
+
+ggplot(tabla, aes(x = reorder(row.names(tabla), - Overall), y = Overall)) +
+  geom_bar(stat = "identity", color = "black", fill = "grey", alpha = 0.8) +
+  labs(title = "Importancia de variables (Xgboost)", x = "Variables", y = "Importancia") +
+  theme_minimal() +
+  geom_text(label = row.names(tabla), hjust = 0, angle = 90) +
+  theme(axis.text.x = element_blank())
+
+
+```
+
+
+Este orden de importancia de variables puede servir de base para la selección de variables del algoritmo 'XGboost'. Por esta razón, seleccionaremos las siguientes variables: 
+
+"edad", "creatinina", "presion_arterial_sistolica", "presion_arterial_diastolica", "inhibidores_ECA_si", "sodio", "betabloqueadores_si", "potasio".  
+
+
+Volvemos a repetir el proceso con las variables seleccionadas:
+
+```{r eval = TRUE}
+# Tuneado de parámetros min_child_weight, eta y nrounds en XGboost con las variables seleccionadas: 
+
+set.seed(1234)
+
+xgbm_2 <- train(mortalidad ~ edad + creatinina + presion_arterial_sistolica + presion_arterial_diastolica +
+  inhibidores_ECA_si + sodio + betabloqueadores_si + potasio, data = HF_prep, method = "xgbTree", 
+  trControl = trainControl(method = "repeatedcv", number = 4, repeats = 5, savePredictions = "all", classProbs = TRUE),
+  tuneGrid = expand.grid(min_child_weight = c(5, 10, 20), eta = c(0.001, 0.01, 0.03, 0.05, 0.1),
+  nrounds = c(50, 100, 500, 1000), max_depth = 6, gamma = 0, colsample_bytree = 1, subsample = 1), verbose = FALSE)
+
+xgbm_2
+
+plot(xgbm_2)
+
+
+```
+
+
+Aunque el entrenamiento nos ofrece como parámetros óptimos min_child_weight = 20 y eta = 0.001, si miramos las gráficas obtenidas, parece más fiable elegir los parámetros min_child_weight = 20 y eta = 0.05.  
+
+
+Vamos a hacer estudio de Early stopping para evitar un posible sobreajuste del parámetro nrounds:  
+
+```{r eval = TRUE}
+# Estudio de Early stopping:
+
+set.seed(1234)
+
+## Fijamos los parámetros min_child_weight y eta para ver como evoluciona en función del parámetro nrounds:
+
+xgbm_3 <- train(mortalidad ~ edad + creatinina + presion_arterial_sistolica + presion_arterial_diastolica +
+  inhibidores_ECA_si + sodio + betabloqueadores_si + potasio, data = HF_prep, method = "xgbTree", 
+  trControl = trainControl(method = "repeatedcv", number = 4, repeats = 5, savePredictions = "all", classProbs = TRUE),
+  tuneGrid = expand.grid(min_child_weight = 20, eta = 0.05, nrounds = c(50, 75, 100, 200, 300, 500, 800, 1000, 1200),
+  max_depth = 6, gamma = 0, colsample_bytree = 1, subsample = 1), verbose = FALSE)
+
+xgbm_3
+
+ggplot(xgbm_3$results, aes(x = nrounds, y = Accuracy)) +
+  geom_line(color = "black", alpha = 0.8) +
+  geom_point(color = "black", alpha = 0.8) +
+  labs(title = "Accuracy en función del parámetro nrounds (XGboost)", x = "nrounds", y = "Accuracy") +
+  theme_minimal()
+
+
+```
+
+
+Como el Accuracy va disminuyendo, se prefiere elegir un valor bajo de nrounds, por lo que nos quedamos con **min_child_weight = 20, eta = 0.05 y nrounds = 75 para 'XGboost'**.   
+
+
+## 14: Comparación de modelos con XGboost.
+
+En este apartado, se añade el modelo 'XGboost' a la comparativa con el resto de modelos:   
+
+```{r eval = TRUE}
+# Comparación de modelos vía validación cruzada repetida:  
+
+source ("cruzada xgboost binaria.R")
+
+## Modelo XGboost:
+
+modelo_xgboost <- cruzadaxgbmbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",                 "presion_arterial_sistolica", "presion_arterial_diastolica", "inhibidores_ECA_si", "sodio", "betabloqueadores_si",        "potasio"), listclass = c(""), grupos = 4, sinicio = 1234, repe = 10, min_child_weight = 20, eta = 0.05, nrounds = 75,
+  max_depth = 6, gamma = 0, colsample_bytree = 1, subsample = 1)
+
+modelo_xgboost$modelo = "xgboost"
+
+
+# Gráficos boxplot:
+
+union7 <- rbind(modelo_logistica_mmpc, modelo_rednnet, modelo_bagging, modelo_rf, modelo_gbm, modelo_xgboost)
+
+par(cex.axis = 0.9)
+boxplot(data = union7, col = "pink", tasa ~ modelo, main = "TASA DE FALLOS")
+
+par(cex.axis = 0.9)
+boxplot(data = union7, col = "pink", auc ~ modelo, main = "AUC")
+
+
+```
+
+
+Observando el **primer gráfico boxplot**:  
+
+* El modelo gbm es el que menor tasa de fallos presentan en sus predicciones.   
+
+* En términos de varianza, es el modelo xgboost el que presenta menor varianza de los resultados.   
+
+
+Si nos fijamos en el **segundo gráfico boxplot**:  
+
+* Los modelos logist_mmpc y rf son los que mayor AUC presenta.   
+
+* No obstante, el modelo bagging es el que presenta una menor varianza de los resultados.  
+
+* El modelo con menor número de variables seleccionadas es gbm. Este modelo tiene un AUC menor que otros.   
+
+
+## 15: Tuneado de SVM (lineal).
+
+Otro algoritmo de clasificación.   
+
+Procedemos al tuneado del parámetro C de este algoritmo:   
+
+```{r eval = TRUE}
+# Tuneado del parámetro C en SVM (lineal) con las variables seleccionadas del método MMPC:
+
+set.seed(1234)
+
+SVM_lineal <- train(mortalidad ~ edad + presion_arterial_sistolica + creatinina + sodio + crepitantes_no +
+  inhibidores_ECA_si, data = HF_prep, method = "svmLinear", trControl = trainControl(method = "repeatedcv", number = 4,
+  repeats = 5, savePredictions = "all", classProbs = TRUE), 
+  tuneGrid = expand.grid(C = c(0.01, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 30, 50)), verbose = FALSE)
+
+SVM_lineal
+SVM_lineal$results
+
+ggplot(SVM_lineal$results, aes(x = factor(C), y = Accuracy)) +
+  geom_point(position = position_dodge(width = 0.5), size = 3)
+
+
+```
+
+
+No se observa máximo de Accuracy, por lo que nos quedamos con **C = 0.1 para 'SVM (lineal)'**.   
+
+
+## 15: Tuneado de SVM (polinomial).
+
+Otro algoritmo de clasificación.   
+
+Procedemos al tuneado del parámetro C y scale de este algoritmo:   
+
+```{r eval = TRUE}
+# Tuneado de parámetros C y scale en SVM (polinomial) con las variables seleccionadas del método MMPC: 
+
+set.seed(1234)
+
+SVM_poly <- train(mortalidad ~ edad + presion_arterial_sistolica + creatinina + sodio + crepitantes_no +
+  inhibidores_ECA_si, data = HF_prep, method = "svmPoly", trControl = trainControl(method = "repeatedcv", number = 4,
+  repeats = 5, savePredictions = "all", classProbs = TRUE),
+  tuneGrid = expand.grid(C = c(0.01, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 25, 30, 50), degree = 2,
+  scale = c(0.1, 0.5, 1, 2, 5)), verbose = FALSE)
+
+SVM_poly
+SVM_poly$results
+
+ggplot(SVM_poly$results, aes(x = factor(C), y = Accuracy, pch = factor(scale))) +
+  geom_point(position = position_dodge(width = 0.5), size = 3)
+
+
+```
+
+
+En vista del gráfico, nos quedamos con **C = 0.5 y scale = 5 para 'SVM (polinomial)'** para evitar sobreajuste.    
+
+
+## 15: Tuneado de SVM (RBF).
+
+Otro algoritmo de clasificación.   
+
+Procedemos al tuneado del parámetro C y sigma de este algoritmo:  
+
+```{r eval = TRUE}
+# Tuneado de parámetros C y sigma en SVM (RBF) con las variables seleccionadas del método MMPC:
+
+set.seed(1234)
+
+SVM_radial <- train(mortalidad ~ edad + presion_arterial_sistolica + creatinina + sodio + crepitantes_no +
+  inhibidores_ECA_si, data = HF_prep, method = "svmRadial", trControl = trainControl(method = "repeatedcv", number = 4,
+  repeats = 5, savePredictions = "all", classProbs = TRUE),
+  tuneGrid = expand.grid(C = c(0.01, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 25, 30, 50), sigma = c(0.0001, 0.005, 0.01, 0.05)),
+  verbose = FALSE)
+
+SVM_radial
+SVM_radial$results
+
+ggplot(SVM_radial$results, aes(x = factor(C), y = Accuracy, color = factor(sigma))) + 
+  geom_point(position = position_dodge(width = 0.5), size = 3)
+
+
+```
+
+
+Nos quedamos con **C = 2 y sigma = 0.005 para 'SVM (RBF)'**.   
+
+
+## 16: Comparación de modelos con SVM (lineal, polinomial y radial).
+
+En este apartado, se añaden los distintos modelos de 'SVM' a la comparativa con el resto de modelos: 
+
+```{r eval = TRUE}
+# Comparación de modelos vía validación cruzada repetida: 
+
+source ("cruzada SVM binaria lineal.R")
+source ("cruzada SVM binaria polinomial.R")
+source ("cruzada SVM binaria RBF.R")
+
+## Modelo SVM (lineal):
+
+modelo_svm_lineal <- cruzadaSVMbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad",                             "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"), listclass = c(""),
+  grupos = 4, sinicio = 1234, repe = 10, C = 0.1)
+
+modelo_svm_lineal$modelo = "svm_lineal"
+
+## Modelo SVM (polinomial):
+
+modelo_svm_polinomial <- cruzadaSVMbinPoly(data = HF_prep, vardep = "mortalidad", listconti = c("edad",                     "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"), listclass = c(""),
+  grupos = 4, sinicio = 1234, repe = 10, C = 0.5, degree = 2, scale = 5)
+
+modelo_svm_polinomial$modelo = "svm_polinomial"
+
+## Modelo SVM (RBF):
+
+modelo_svm_rbf <- cruzadaSVMbinRBF(data = HF_prep, vardep = "mortalidad", listconti = c("edad",                             "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"), listclass = c(""),
+  grupos = 4, sinicio = 1234, repe = 10, C = 2, sigma = 0.005)
+
+modelo_svm_rbf$modelo = "svm_rbf"
+
+
+# Gráficos boxplot:
+
+union8 <- rbind(modelo_logistica_mmpc, modelo_rednnet, modelo_bagging, modelo_rf, modelo_gbm, modelo_xgboost,
+  modelo_svm_lineal, modelo_svm_polinomial, modelo_svm_rbf)
+
+par(cex.axis = 0.7, las = 2)
+boxplot(data = union8, col = "pink", tasa ~ modelo, main = "TASA DE FALLOS")
+
+par(cex.axis = 0.7, las = 2)
+boxplot(data = union8, col = "pink", auc ~ modelo, main = "AUC") 
+
+
+```
+
+
+Observando el **primer gráfico boxplot**:  
+
+* El modelo gbm es el que menor tasa de fallos presentan en sus predicciones.   
+
+* En términos de varianza, son los modelos svm_lineal y svm_polinomial los que presentan menor varianza de los resultados.   
+
+
+Si nos fijamos en el **segundo gráfico boxplot**:  
+
+* Los modelos logist_mmpc y rf son los que mayor AUC presentan.   
+
+* Sin embargo, es el modelo bagging el que presenta una menor varianza de los resultados.   
+ 
+* El modelo con menor número de variables seleccionadas es gbm. Este modelo es de los que mayor AUC presentan.   
+
+
+## 17: Ensamblado de modelos.
+
+En este apartado se procede al ensamblado de modelos:
+
+```{r eval = TRUE}
+# 1: LECTURA DE LAS FUNCIONES CRUZADAS DE ENSAMBLADO:
+
+source("cruzadas ensamblado binaria fuente.R")
+
+ 
+# 2 y 3: DEFINICION DE VARIABLES, SEMILLA Y REPETICIONES Y APLICACION DE FUNCIONES CRUZADAS PARA ENSAMBLAR:
+## Modelo Logística (MMPC):
+
+modelo_logistica_mmpc_ensamblado <- cruzadalogistica(data = as.data.frame(HF_prep), vardep = "mortalidad", 
+  listconti = c("edad", "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"),
+  listclass = c(""), grupos = 4, sinicio = 1234, repe = 10)
+
+modelo_logistica_mmpc_ensamblado_resultados <- as.data.frame(modelo_logistica_mmpc_ensamblado[1])
+modelo_logistica_mmpc_ensamblado_resultados$modelo <- "logist_mmpc"
+modelo_logistica_mmpc_ensamblado_predicciones <- as.data.frame(modelo_logistica_mmpc_ensamblado[2])
+modelo_logistica_mmpc_ensamblado_predicciones$logist_mmpc <- modelo_logistica_mmpc_ensamblado_predicciones$Yes
+
+## Modelo Red neuronal:
+
+modelo_rednnet_ensamblado <- cruzadaavnnetbin(data = HF_prep, vardep = "mortalidad", 
+  listconti = c("edad", "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"),
+  listclass = c(""), grupos = 4, sinicio = 1234, repe = 10, repeticiones = 5, itera = 100, size = 5, decay = 0.01)
+
+modelo_rednnet_ensamblado_resultados <- as.data.frame(modelo_rednnet_ensamblado[1])
+modelo_rednnet_ensamblado_resultados$modelo <- "rednnet"
+modelo_rednnet_ensamblado_predicciones <- as.data.frame(modelo_rednnet_ensamblado[2])
+modelo_rednnet_ensamblado_predicciones$rednnet <- modelo_rednnet_ensamblado_predicciones$Yes
+
+## Modelo Bagging:
+
+modelo_bagging_ensamblado <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",        "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 6, ntree = 300, replace = TRUE, sampsize = 50)
+
+modelo_bagging_ensamblado_resultados <- as.data.frame(modelo_bagging_ensamblado[1])
+modelo_bagging_ensamblado_resultados$modelo <- "bagging"
+modelo_bagging_ensamblado_predicciones <- as.data.frame(modelo_bagging_ensamblado[2])
+modelo_bagging_ensamblado_predicciones$bagging <- modelo_bagging_ensamblado_predicciones$Yes
+
+## Modelo Rf:
+
+modelo_rf_ensamblado <- cruzadarfbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",             "presion_arterial_sistolica", "sodio", "hemoglobina", "inhibidores_ECA_si"), listclass = c(""), grupos = 4,
+  sinicio = 1234, repe = 10, nodesize = 10, mtry = 4, ntree = 200, replace = TRUE, sampsize = 50)
+
+modelo_rf_ensamblado_resultados <- as.data.frame(modelo_rf_ensamblado[1])
+modelo_rf_ensamblado_resultados$modelo <- "rf"
+modelo_rf_ensamblado_predicciones <- as.data.frame(modelo_rf_ensamblado[2])
+modelo_rf_ensamblado_predicciones$rf <- modelo_rf_ensamblado_predicciones$Yes
+
+## Modelo Gbm:
+
+modelo_gbm_ensamblado <- cruzadagbmbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",           "presion_arterial_sistolica", "sodio"), listclass = c(""), grupos = 4, sinicio = 1234, repe = 10, shrinkage = 0.05,
+  n.minobsinnode = 20, n.trees = 75, interaction.depth = 2)
+
+modelo_gbm_ensamblado_resultados <- as.data.frame(modelo_gbm_ensamblado[1])
+modelo_gbm_ensamblado_resultados$modelo <- "gbm"
+modelo_gbm_ensamblado_predicciones <- as.data.frame(modelo_gbm_ensamblado[2])
+modelo_gbm_ensamblado_predicciones$gbm <- modelo_gbm_ensamblado_predicciones$Yes
+
+## Modelo Xgboost:
+
+modelo_xgboost_ensamblado <- cruzadaxgbmbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad", "creatinina",      "presion_arterial_sistolica", "presion_arterial_diastolica", "inhibidores_ECA_si", "sodio", "betabloqueadores_si",        "potasio"), listclass = c(""), grupos = 4, sinicio = 1234, repe = 10, min_child_weight = 20, eta = 0.05, nrounds = 75, 
+  max_depth = 6, gamma = 0, colsample_bytree = 1, subsample = 1)
+
+modelo_xgboost_ensamblado_resultados <- as.data.frame(modelo_xgboost_ensamblado[1])
+modelo_xgboost_ensamblado_resultados$modelo <- "xgboost"
+modelo_xgboost_ensamblado_predicciones <- as.data.frame(modelo_xgboost_ensamblado[2])
+modelo_xgboost_ensamblado_predicciones$xgboost <- modelo_xgboost_ensamblado_predicciones$Yes
+
+## Modelo SVM (lineal):
+
+modelo_svm_lineal_ensamblado <- cruzadaSVMbin(data = HF_prep, vardep = "mortalidad", listconti = c("edad",                  "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"), listclass = c(""),
+  grupos = 4, sinicio = 1234, repe = 10, C = 0.1)
+
+modelo_svm_lineal_ensamblado_resultados <- as.data.frame(modelo_svm_lineal_ensamblado[1])
+modelo_svm_lineal_ensamblado_resultados$modelo <- "svm_lineal"
+modelo_svm_lineal_ensamblado_predicciones <- as.data.frame(modelo_svm_lineal_ensamblado[2])
+modelo_svm_lineal_ensamblado_predicciones$svm_lineal <- modelo_svm_lineal_ensamblado_predicciones$Yes
+
+## Modelo SVM (polinomial):
+
+modelo_svm_polinomial_ensamblado <- cruzadaSVMbinPoly(data = HF_prep, vardep = "mortalidad", listconti = c("edad",          "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"), listclass = c(""),
+  grupos = 4, sinicio = 1234, repe = 10, C = 0.5, degree = 2, scale = 5)
+
+modelo_svm_polinomial_ensamblado_resultados <- as.data.frame(modelo_svm_polinomial_ensamblado[1])
+modelo_svm_polinomial_ensamblado_resultados$modelo <- "svm_polinomial"
+modelo_svm_polinomial_ensamblado_predicciones <- as.data.frame(modelo_svm_polinomial_ensamblado[2])
+modelo_svm_polinomial_ensamblado_predicciones$svm_polinomial <- modelo_svm_polinomial_ensamblado_predicciones$Yes
+
+## Modelo SVM (RBF):
+
+modelo_svm_rbf_ensamblado <- cruzadaSVMbinRBF(data = HF_prep, vardep = "mortalidad", listconti = c("edad",                  "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"), listclass = c(""),
+  grupos = 4, sinicio = 1234, repe = 10, C = 2, sigma = 0.005)
+
+modelo_svm_rbf_ensamblado_resultados <- as.data.frame(modelo_svm_rbf_ensamblado[1])
+modelo_svm_rbf_ensamblado_resultados$modelo <- "svm_rbf"
+modelo_svm_rbf_ensamblado_predicciones <- as.data.frame(modelo_svm_rbf_ensamblado[2])
+modelo_svm_rbf_ensamblado_predicciones$svm_rbf <- modelo_svm_rbf_ensamblado_predicciones$Yes
+
+
+# 4: CONSTRUCCION DE TODOS LOS ENSAMBLADOS:
+
+unipredi <- cbind(modelo_logistica_mmpc_ensamblado_predicciones, modelo_rednnet_ensamblado_predicciones, 
+  modelo_bagging_ensamblado_predicciones, modelo_rf_ensamblado_predicciones,
+  modelo_gbm_ensamblado_predicciones, modelo_xgboost_ensamblado_predicciones,
+  modelo_svm_lineal_ensamblado_predicciones, modelo_svm_polinomial_ensamblado_predicciones,
+  modelo_svm_rbf_ensamblado_predicciones)
+
+## Esto es para eliminar columnas duplicadas:
+
+unipredi <- unipredi[, !duplicated(colnames(unipredi))]
+
+## Construccion de ensamblados:
+
+unipredi$predi10 <- (unipredi$logist_mmpc + unipredi$rednnet) / 2
+unipredi$predi11 <- (unipredi$logist_mmpc + unipredi$bagging) / 2
+unipredi$predi12 <- (unipredi$logist_mmpc + unipredi$rf) / 2
+unipredi$predi13 <- (unipredi$logist_mmpc + unipredi$gbm) / 2
+unipredi$predi14 <- (unipredi$logist_mmpc + unipredi$xgboost) / 2
+unipredi$predi15 <- (unipredi$logist_mmpc + unipredi$svm_lineal) / 2
+unipredi$predi16 <- (unipredi$logist_mmpc + unipredi$svm_polinomial) / 2
+unipredi$predi17 <- (unipredi$logist_mmpc + unipredi$svm_rbf) / 2
+unipredi$predi18 <- (unipredi$rednnet + unipredi$bagging) / 2
+unipredi$predi19 <- (unipredi$rednnet + unipredi$rf) / 2
+unipredi$predi20 <- (unipredi$rednnet + unipredi$gbm) / 2
+unipredi$predi21 <- (unipredi$rednnet + unipredi$xgboost) / 2
+unipredi$predi22 <- (unipredi$rednnet + unipredi$svm_lineal) / 2
+unipredi$predi23 <- (unipredi$rednnet + unipredi$svm_polinomial) / 2
+unipredi$predi24 <- (unipredi$rednnet + unipredi$svm_rbf) / 2
+unipredi$predi25 <- (unipredi$bagging + unipredi$rf) / 2
+unipredi$predi26 <- (unipredi$bagging + unipredi$gbm) / 2
+unipredi$predi27 <- (unipredi$bagging + unipredi$xgboost) / 2
+unipredi$predi28 <- (unipredi$bagging + unipredi$svm_lineal) / 2
+unipredi$predi29 <- (unipredi$bagging + unipredi$svm_polinomial) / 2
+unipredi$predi30 <- (unipredi$bagging + unipredi$svm_rbf) / 2
+unipredi$predi31 <- (unipredi$rf + unipredi$gbm) / 2
+unipredi$predi32 <- (unipredi$rf + unipredi$xgboost) / 2
+unipredi$predi33 <- (unipredi$rf + unipredi$svm_lineal) / 2
+unipredi$predi34 <- (unipredi$rf + unipredi$svm_polinomial) / 2
+unipredi$predi35 <- (unipredi$rf + unipredi$svm_rbf) / 2
+unipredi$predi36 <- (unipredi$gbm + unipredi$xgboost) / 2
+unipredi$predi37 <- (unipredi$gbm + unipredi$svm_lineal) / 2
+unipredi$predi38 <- (unipredi$gbm + unipredi$svm_polinomial) / 2
+unipredi$predi39 <- (unipredi$gbm + unipredi$svm_rbf) / 2
+unipredi$predi40 <- (unipredi$xgboost + unipredi$svm_lineal) / 2
+unipredi$predi41 <- (unipredi$xgboost + unipredi$svm_polinomial) / 2
+unipredi$predi42 <- (unipredi$xgboost + unipredi$svm_rbf) / 2
+
+unipredi$predi43 <- (unipredi$logist_mmpc + unipredi$rednnet + unipredi$bagging) / 3
+unipredi$predi44 <- (unipredi$logist_mmpc + unipredi$rednnet + unipredi$rf) / 3
+unipredi$predi45 <- (unipredi$logist_mmpc + unipredi$rednnet + unipredi$gbm) / 3
+unipredi$predi46 <- (unipredi$logist_mmpc + unipredi$rednnet + unipredi$xgboost) / 3
+unipredi$predi47 <- (unipredi$logist_mmpc + unipredi$rednnet + unipredi$svm_lineal) / 3
+unipredi$predi48 <- (unipredi$logist_mmpc + unipredi$rednnet + unipredi$svm_polinomial) / 3
+unipredi$predi49 <- (unipredi$logist_mmpc + unipredi$rednnet + unipredi$svm_rbf) / 3
+unipredi$predi50 <- (unipredi$logist_mmpc + unipredi$bagging + unipredi$rf) / 3
+unipredi$predi51 <- (unipredi$logist_mmpc + unipredi$bagging + unipredi$gbm) / 3
+unipredi$predi52 <- (unipredi$logist_mmpc + unipredi$bagging + unipredi$xgboost) / 3
+unipredi$predi53 <- (unipredi$logist_mmpc + unipredi$bagging + unipredi$svm_lineal) / 3
+unipredi$predi54 <- (unipredi$logist_mmpc + unipredi$bagging + unipredi$svm_polinomial) / 3
+unipredi$predi55 <- (unipredi$logist_mmpc + unipredi$bagging + unipredi$svm_rbf) / 3
+unipredi$predi56 <- (unipredi$logist_mmpc + unipredi$rf + unipredi$gbm) / 3
+unipredi$predi57 <- (unipredi$logist_mmpc + unipredi$rf + unipredi$xgboost) / 3
+unipredi$predi58 <- (unipredi$logist_mmpc + unipredi$rf + unipredi$svm_lineal) / 3
+unipredi$predi59 <- (unipredi$logist_mmpc + unipredi$rf + unipredi$svm_polinomial) / 3
+unipredi$predi60 <- (unipredi$logist_mmpc + unipredi$rf + unipredi$svm_rbf) / 3
+unipredi$predi61 <- (unipredi$logist_mmpc + unipredi$gbm + unipredi$xgboost) / 3
+unipredi$predi62 <- (unipredi$logist_mmpc + unipredi$gbm + unipredi$svm_lineal) / 3
+unipredi$predi63 <- (unipredi$logist_mmpc + unipredi$gbm + unipredi$svm_polinomial) / 3
+unipredi$predi64 <- (unipredi$logist_mmpc + unipredi$gbm + unipredi$svm_rbf) / 3
+unipredi$predi65 <- (unipredi$logist_mmpc + unipredi$xgboost + unipredi$svm_lineal) / 3
+unipredi$predi66 <- (unipredi$logist_mmpc + unipredi$xgboost + unipredi$svm_polinomial) / 3
+unipredi$predi67 <- (unipredi$logist_mmpc + unipredi$xgboost + unipredi$svm_rbf) / 3
+unipredi$predi68 <- (unipredi$rf + unipredi$rednnet + unipredi$bagging) / 3
+unipredi$predi69 <- (unipredi$rf + unipredi$rednnet + unipredi$gbm) / 3
+unipredi$predi70 <- (unipredi$rf + unipredi$rednnet + unipredi$xgboost) / 3
+unipredi$predi71 <- (unipredi$rf + unipredi$rednnet + unipredi$svm_lineal) / 3
+unipredi$predi72 <- (unipredi$rf + unipredi$rednnet + unipredi$svm_polinomial) / 3
+unipredi$predi73 <- (unipredi$rf + unipredi$rednnet + unipredi$svm_rbf) / 3
+unipredi$predi74 <- (unipredi$rf + unipredi$bagging + unipredi$gbm) / 3
+unipredi$predi75 <- (unipredi$rf + unipredi$bagging + unipredi$xgboost) / 3
+unipredi$predi76 <- (unipredi$rf + unipredi$bagging + unipredi$svm_lineal) / 3
+unipredi$predi77 <- (unipredi$rf + unipredi$bagging + unipredi$svm_polinomial) / 3
+unipredi$predi78 <- (unipredi$rf + unipredi$bagging + unipredi$svm_rbf) / 3
+unipredi$predi79 <- (unipredi$rf + unipredi$gbm + unipredi$xgboost) / 3
+unipredi$predi80 <- (unipredi$rf + unipredi$gbm + unipredi$svm_lineal) / 3
+unipredi$predi81 <- (unipredi$rf + unipredi$gbm + unipredi$svm_polinomial) / 3
+unipredi$predi82 <- (unipredi$rf + unipredi$gbm + unipredi$svm_rbf) / 3
+unipredi$predi83 <- (unipredi$rf + unipredi$xgboost + unipredi$svm_lineal) / 3
+unipredi$predi84 <- (unipredi$rf + unipredi$xgboost + unipredi$svm_polinomial) / 3
+unipredi$predi85 <- (unipredi$rf + unipredi$xgboost + unipredi$svm_rbf) / 3
+
+unipredi$predi86 <- (unipredi$logist_mmpc + unipredi$rf + unipredi$bagging + unipredi$xgboost) / 4
+unipredi$predi87 <- (unipredi$logist_mmpc + unipredi$rf + unipredi$bagging + unipredi$gbm) / 4
+unipredi$predi88 <- (unipredi$rf + unipredi$bagging + unipredi$xgboost + unipredi$gbm) / 4
+
+unipredi$predi89 <- (unipredi$logist_mmpc + unipredi$rf + unipredi$bagging + unipredi$xgboost + unipredi$gbm) / 5
+unipredi$predi90 <- (unipredi$logist_mmpc + unipredi$rf + unipredi$bagging + unipredi$xgboost + unipredi$rednnet) / 5
+unipredi$predi91 <- (unipredi$rf + unipredi$bagging + unipredi$xgboost + unipredi$gbm + unipredi$rednnet) / 5
+
+
+# 5: PROCESADO DE LOS ENSAMBLADOS:
+## Listado de modelos a considerar:
+
+listado <- c("logist_mmpc", "rednnet", "bagging", "rf", "gbm",  "xgboost", "svm_lineal", "svm_polinomial",       "svm_rbf", "predi10", "predi11", "predi12", "predi13", "predi14", "predi15", "predi16", "predi17", "predi18",     "predi19", "predi20", "predi21", "predi22", "predi23", "predi24", "predi25", "predi26", "predi27", "predi28",     "predi29", "predi30", "predi31", "predi32", "predi33", "predi34", "predi35", "predi36", "predi37", "predi38",     "predi39", "predi40", "predi41", "predi42", "predi43", "predi44", "predi45", "predi46", "predi47", "predi48",     "predi49", "predi50", "predi51", "predi52", "predi53", "predi54", "predi55", "predi56", "predi57", "predi58",     "predi59", "predi60", "predi61", "predi62", "predi63", "predi64", "predi65", "predi66", "predi67", "predi68",     "predi69", "predi70", "predi71", "predi72", "predi73", "predi74", "predi75", "predi76", "predi77", "predi78",     "predi79", "predi80", "predi81", "predi82", "predi83", "predi84", "predi85", "predi86", "predi87", "predi88",     "predi89", "predi90", "predi91")
+
+## Defino funcion tasafallos y funcion auc:
+
+tasafallos <- function(x, y) {
+  confu <- confusionMatrix(x, y)
+  tasa <- confu[[3]][1]
+  return(tasa)
+}
+
+auc <- function(x, y) {
+  curvaroc <- roc(response = x, predictor = y)
+  auc <- curvaroc$auc
+  return(auc)
+}
+
+## Se obtiene el número de repeticiones CV y se calculan las medias por repe en el data frame medias0:
+
+repeticiones <- nlevels(factor(unipredi$Rep))
+unipredi$Rep <- as.factor(unipredi$Rep)
+unipredi$Rep <- as.numeric(unipredi$Rep)
+
+medias0 <- data.frame(c())
+for (prediccion in listado) {
+  unipredi$proba <- unipredi[, prediccion]
+  unipredi[, prediccion] <- ifelse(unipredi[, prediccion] > 0.5, "Yes", "No")
+  for (repe in 1 : repeticiones) {
+    paso <- unipredi[(unipredi$Rep == repe), ]
+    pre <- factor(paso[, prediccion])
+    archi <- paso[, c("proba", "obs")]
+    archi <- archi[order(archi$proba), ]
+    obs <- paso[, c("obs")]
+    tasa = 1 - tasafallos(pre, obs)
+    t <- as.data.frame(tasa)
+    t$modelo <- prediccion
+    auc <- suppressMessages(auc(archi$obs, archi$proba))
+    t$auc <- auc
+    medias0 <- rbind(medias0, t)
+  }
+}
+
+
+# 6: GRÁFICOS BOXPLOT:
+
+par(cex.axis = 0.7, las = 2)
+boxplot(data = medias0, tasa ~ modelo, col = "pink", main = "TASA FALLOS")
+
+par(cex.axis = 0.7, las = 2)
+boxplot(data = medias0, auc ~ modelo, col = "pink" , main = "AUC")
+
+
+# 7: TABLAS ORDENADAS:
+## Se ordenan las tablas por tasa de fallos y auc:
+
+tablamedias <- medias0 |> group_by(modelo) |> summarize(tasa = mean(tasa))
+tablamedias <- as.data.frame(tablamedias[order(tablamedias$tasa), ])
+
+tablamedias2 <- medias0 |> group_by(modelo) |> summarize(auc = mean(auc))     
+tablamedias2 <- tablamedias2[order(- tablamedias2$auc), ]
+
+
+# 8: GRÁFICOS BOXPLOT ORDENADOS:
+
+medias0$modelo <- with(medias0, reorder(modelo, tasa, mean))
+par(cex.axis = 0.7, las = 2)
+boxplot(data = medias0, tasa ~ modelo, col = "pink", main =' TASA FALLOS')
+
+medias0$modelo <- with(medias0, reorder(modelo, auc, mean))
+par(cex.axis = 0.7, las = 2)
+boxplot(data = medias0, auc ~ modelo, col = "pink", main = 'AUC')
+
+
+```
+
+
+Observando el **primer gráfico boxplot**:  
+
+* Son varios modelos los que menor tasa de fallos presentan en sus predicciones.    
+
+
+Si nos fijamos en el **segundo gráfico boxplot**:  
+
+* Son los modelos predi56, predi58, predi57, predi12 y predi51 los que mayor AUC presentan.   
+
+
+Una vez se han graficado todos los modelos, nos quedamos con aquellos de interés:   
+
+```{r eval = TRUE}
+# 9: GRÁFICOS BOXPLOT ELEGIDOS:
+
+listadobis <- c("logist_mmpc", "rednnet", "bagging", "rf", "gbm", "xgboost", "svm_lineal", "svm_polinomial",             "svm_rbf", "predi12", "predi13", "predi14", "predi22", "predi26", "predi31", "predi36", "predi51", "predi56",             "predi57", "predi58", "predi61", "predi70", "predi71", "predi74", "predi79", "predi87", "predi88", "predi90",             "predi91")
+
+medias0$modelo <- as.character(medias0$modelo)
+
+mediasver <- medias0[medias0$modelo %in% listadobis, ]
+
+mediasver$modelo <- with(mediasver, reorder(modelo, tasa, mean))
+par(cex.axis = 0.6, las = 2)
+boxplot(data = mediasver, tasa ~ modelo, col = "pink", main =' TASA FALLOS')
+
+mediasver$modelo <- with(mediasver, reorder(modelo, auc, mean))
+par(cex.axis = 0.6, las = 2) 
+boxplot(data = mediasver, auc ~ modelo, col = "pink", main = 'AUC')
+
+
+```
+
+
+De nuevo, observando los dos gráficos boxplot se llega a la conclusión de que el modelo que se mejor ajusta a nuestros datos es el modelo predi51 puesto que es el que mejor balance establece entre una baja tasa de fallos, un alto AUC y una menor varianza de los resultados.   
+
+Es un modelo ensamblado, fruto del promedio de los modelos logist_mmpc, bagging y gbm.  
+
+Sin embargo, debido al bajo número de observaciones que tiene nuestra clase minoritaria de la variable objetivo, no podemos permitirnos modelos tan complejos como el predi51.   
+
+Por esta razón se prefiere optar por un modelo más sencillo con buenas características también. En este sentido, el modelo logist_mmpc se adecúa a nuestras exigencias.   
+
+
+## 18: Elección del mejor modelo.
+
+Una vez se han graficado todos los modelos y se han tenido en cuenta diferentes aspectos de estos tales como la tasa de fallos, AUC y varianza al estimar las predicciones, así como la complejidad del modelo, podemos concluir qué **el mejor modelo para nuestros datos es el modelo logist_mmpc**.   
+
+Las razones por las que se elige este modelo frente al resto se han ido comentando a lo largo del trabajo. De entre todos los modelos sin ensamblar, este modelo es el que mayor AUC presenta.   
+
+En cuanto a la tasa de fallos, aunque el modelo logist_mmpc no es el que menor tasa de fallos presenta en sus predicciones, la diferencia con respecto a otros modelos con menor tasa de fallos en sus predicciones no es grande, por lo que se prefiere un modelo con mayor AUC.   
+
+Por otra parte, aunque existen otros modelos ensamblados que presentan un AUC ligeramente mayor y una tasa de fallos menor al modelo logist_mmpc, no compensa complicar la elección del modelo por una pequeña mejora. Además, el número de observaciones de nuestra clase minoritaria de la variable objetivo nos limita la elección del modelo a uno no demasiado complejo.    
+
+Por todas estas razones, el modelo logist_mmpc es el que mejor se va a adaptar a nuestros datos.  
+
+
+Con estas explicaciones y en vista a los gráficos boxplot comentados durante todo el trabajo, **no se procede a realizar contraste de hipótesis entre ningún modelo**, puesto que se tiene certeza de que el modelo logist_mmpc es el mejor modelo.   
+
+
+## 19: Características de nuestro modelo elegido.
+
+Se hace la matriz de confusión de nuestro modelo elegido Logística (MMPC) y se obtiene la curva ROC. En este caso, se opta por hacer validación cruzada con 10 grupos. Así se obtiene el error aproximado con el modelo construido con el 90% de las observaciones:   
+
+```{r eval = TRUE}
+# Entrenamos el modelo elegido Logística (MMPC) con las variables seleccionadas del método MMPC:
+
+set.seed(1234)
+
+modelo_elegido_logistica_mmpc <- train(mortalidad ~ edad + presion_arterial_sistolica + creatinina + sodio +                crepitantes_no + inhibidores_ECA_si, data = HF_prep, method = "glm", trControl = trainControl(method = "cv",
+  number = 10, savePredictions = "all", classProbs = TRUE))
+
+modelo_elegido_logistica_mmpc
+
+sal_modelo_elegido_logistica_mmpc <- modelo_elegido_logistica_mmpc$pred
+
+
+# Matriz de confusión:
+
+confusionMatrix(reference = sal_modelo_elegido_logistica_mmpc$obs, data = sal_modelo_elegido_logistica_mmpc$pred,
+  positive = "Yes")
+
+
+# AUC y Curva ROC:
+
+curvaroc_modelo_elegido_logistica_mmpc <- roc(response = sal_modelo_elegido_logistica_mmpc$obs, 
+  predictor = sal_modelo_elegido_logistica_mmpc$Yes)
+curvaroc_modelo_elegido_logistica_mmpc$auc
+
+plot(curvaroc_modelo_elegido_logistica_mmpc)
+
+  
+```
+
+
+Se observa en la matriz de confusión obtenida el problema para detectar correctamente pacientes que fallecen al año de sufrir una insuficiencia cardíaca.  
+
+A continuación, se procede a comentar los resultados obtenidos:  
+
+* La sensibilidad o tasa de verdaderos positivos se refiere a la proporción de pacientes fallecidos que son correctamente identificados o detectados por nuestro modelo Logística (MMPC). Concretamente, la sensibilidad de nuestro modelo Logística (MMPC) es bastante baja: 0.0576.   
+
+* La especificidad o tasa de verdaderos negativos se refiere a la proporción de pacientes no fallecidos que son correctamente identificados o clasificados como no fallecidos. En nuestro caso, la especificidad del modelo Logística (MMPC) es cercana a 1: 0.9876.   
+
+* El Accuracy o tasa de bien clasificados se refiere a la proporción de pacientes clasificados correctamente (tanto pacientes fallecidos como pacientes no fallecidos) sobre el total de pacientes. Se observa un Accuracy alto de nuestro modelo elegido: 0.8232.   
+
+* La tasa de fallos se refiere a la proporción de pacientes clasificados incorrectamente (tanto pacientes fallecidos como pacientes no fallecidos) entre el total de pacientes. En este caso, se calcula una tasa de fallos de 0.1768.   
+
+* La precisión es una medida que se refiere a la proporción de pacientes fallecidos identificados correctamente sobre el total de pacientes clasificados como fallecidos. Así, nuestra precisión es de 0.5.   
+
+* El AUC se refiere al área bajo la curva ROC. La curva ROC es una representación gráfica que muestra la relación entre la sensibilidad y la especificidad de un modelo de clasificación binaria. En este caso, el AUC es de 0.6896.   
+
+
+Con la intención de mejorar la sensibilidad de nuestro modelo, se propone rebajar el punto de corte. Con ello se asume que habrá más falsos positivos.   
+
+El punto de corte establece el límite a partir del cual se clasifica a un paciente como perteneciente a la clase de pacientes fallecidos. 
+
+Se hará uso del método Youden para encontrar el punto de corte óptimo que maximice la capacidad de discriminación del modelo, balanceando adecuadamente la sensibilidad y la especificidad:   
+
+```{r eval = TRUE}
+# Punto de corte óptimo:
+
+valores_optimos <- coords(curvaroc_modelo_elegido_logistica_mmpc, "best", best.method = "youden")
+punto_corte_optimo <- round(valores_optimos$threshold, digits = 2)
+punto_corte_optimo
+
+
+# Probamos el punto de corte óptimo:
+
+sal_modelo_elegido_logistica_mmpc$pred_punto_corte_optimo <- ifelse(sal_modelo_elegido_logistica_mmpc$Yes >
+  punto_corte_optimo, "Yes", "No")
+sal_modelo_elegido_logistica_mmpc$pred_punto_corte_optimo <- as.factor(sal_modelo_elegido_logistica_mmpc$pred_punto_corte_optimo)
+
+
+# Matriz de confusión:
+
+confusionMatrix(reference = sal_modelo_elegido_logistica_mmpc$obs, 
+  data = sal_modelo_elegido_logistica_mmpc$pred_punto_corte_optimo, positive = "Yes")
+
+
+```
+
+
+Se observa una notable mejora en la sensibilidad a costa de un empeoramiento de la especificidad.  
+
+Paralelamente, se ve que la precisión de nuestro modelo ha disminuido ligeramente a un valor de 0.2973 ya que, al disminuir el punto de corte, ha disminuido la proporción de pacientes fallecidos clasificados correctamente sobre el total de pacientes identificados como fallecidos.    
+
+También nuestro Accuracy ha disminuido ya que hay menos pacientes totales clasificados correctamente.  
+
+Puesto que se considera más importante clasificar correctamente a aquellos pacientes que fallecen tras sufrir un infarto, **se propone cambiar el punto de corte a un valor de 0.2**.  
+
+
+Por otra parte, vamos a realizar una tabla con parámetros de la logística:   
+
+```{r eval = TRUE}
+# Tabla de parámetros y signos de la regresión logística con variables seleccionadas del método MMPC:
+
+HF_prep$mortalidad <- relevel(HF_prep$mortalidad, ref = "No")
+
+modelo_logistica_param <- train(mortalidad ~ edad + presion_arterial_sistolica + creatinina + sodio + crepitantes_no +      inhibidores_ECA_si, data = HF_prep, method = "glm", trControl = trainControl(method = "none", savePredictions = "all",
+  classProbs = TRUE))
+
+summary(modelo_logistica_param)
+
+
+```
+
+
+Se observa que todas las variables seleccionadas son significativas, en mayor o menor medida.  
+
+Los signos dan cuenta de que la mayoría de las variables utilizadas, excepto "edad" o "creatinina", disminuyen la probabilidad de fallecer a lo largo del año siguiente a padecer un infarto.  
+
+
+Como última opción, se procede a modelar un árbol de decisión simple con el objetivo de esclarecer el efecto de cada variable en el modelo. Este enfoque considera de manera conjunta tanto las interacciones como los efectos combinados de las demás variables presentes en el modelo.   
+
+
+## 20: Árbol simple.
+
+Este modelo no requiere de variables predictoras dummyficadas ni normalizadas. Con el fin de comprender mejor los resultados de nuestro árbol, las variables seleccionadas para el modelo son las precursoras de las variables seleccionadas mediante nuestro método MMPC elegido:   
+
+```{r eval = TRUE}
+# Árbol simple:
+
+modelo_arbol <- rpart(mortalidad ~ edad + presion_arterial_sistolica + creatinina + sodio + crepitantes + inhibidores_ECA,
+  data = HF, minbucket = 10, method = "class", parms = list(split = "gini"), cp = 0)
+
+summary(modelo_arbol)
+
+rpart.plot(modelo_arbol, extra = 105, nn = TRUE)
+
+
+```
+
+
+En este árbol de decisión simple, se utilizan todas las variables, excepto "crepitantes". Además, se observa cómo estas variables se relacionan entre sí dentro del árbol.  
+
+Existe una consonancia con los parámetros de la tabla logística: pacientes más mayores o con niveles de creatinina superiores a 1.3 mg/dL tienen mayor riesgo a fallecer, mientras que pacientes a los que se les haya suministrado inhibidores de la ECA o con niveles de sodio superiores a 137 mEq/L disminuyen su riesgo.   
+
+
+## 21: Gráficos.
+
+Para finalizar, se representan los siguientes gráficos con el objetivo de comprobar la capacidad de nuestro modelo y la separabilidad de nuestros datos:  
+
+```{r eval = TRUE}
+# Gráficos visualpred:
+
+modelo_elegido_logistica_mmpc_graf <- famdcontour(dataf = as.data.frame(HF_prep), listconti = c("edad",                     "presion_arterial_sistolica", "creatinina", "sodio", "crepitantes_no", "inhibidores_ECA_si"), listclass = c(""),
+  vardep = "mortalidad", title = "GLM", title2 = "", selec = 0, modelo = "glm", classvar = 0)
+
+modelo_elegido_logistica_mmpc_graf[[1]]
+modelo_elegido_logistica_mmpc_graf[[2]] 
+modelo_elegido_logistica_mmpc_graf[[3]] 
+modelo_elegido_logistica_mmpc_graf[[4]] 
+modelo_elegido_logistica_mmpc_graf[[5]] 
+modelo_elegido_logistica_mmpc_graf[[6]]
+
+
+```
+
+
+En relación a los gráficos obtenidos, cada paciente de nuestra base de datos es representado mediante un punto. En los cuatro primeros gráficos, los pacientes fallecidos se representan con un punto rojo, mientras que los pacientes no fallecidos se representan mediante un punto verde.   
+
+El primer gráfico es un gráfico de puntos que representa la distribución de los pacientes en las dos primeras dimensiones del Análisis de Correspondencia Múltiple Factorial (FAMD en inglés). Además, se aprecian contornos de densidad que suponen un indicativo visual de la frecuencia de los puntos en el espacio FAMD.   
+
+El segundo gráfico añade curvas de contorno que permiten visualizar la capacidad discriminatoria del algoritmo predictivo. Las curvas de contorno son diseñadas en función de las probabilidades estimadas por nuestro modelo elegido.   
+ 
+En el tercer gráfico se añaden las variables seleccionadas mediante el método MMPC, empleadas para estimar las predicciones.   
+
+El cuarto gráfico es una representación conjunta de los tres primeros gráficos.  
+
+El quinto gráfico es de puntos, donde el color denota la probabilidad estimada por el modelo. Tonos rojos asignan una probabilidad alta de pertenencia a la case de pacientes fallecidos y tonos verdes implican una probabilidad baja de pertenencia a la misma clase.   
+
+El sexto gráfico es un gráfico de puntos coloreado según la diferencia entre el valor de referencia de la variable objetivo y la probabilidad estimada por nuestro modelo.   
+
+En general, se puede ver el desbalanceamiento de la variable objetivo, así como la mala separabilidad de los datos. Aun así, hay ciertas regiones donde existe una separación más clara de nuestras observaciones y que el modelo predictivo es capaz de discriminar correctamente.   
+
+
+Para acabar, se detiene la paralelización:
+
+```{r eval = TRUE}
+# Se para la paralelización:
+
+stopCluster(make_cluster)
+registerDoSEQ()
+
+
+```
+
+
+## 22: Conclusiones y reflexiones.
+
+Este trabajo ha consistido en un estudio íntegro de un conjunto de datos; empezando por su análisis exploratorio, pasando por la construcción y comparación de diferentes modelos y finalizando con la elección del mejor modelo y comentando los resultados obtenidos del mismo.   
+
+Con dichos resultados, se puede considerar adecuada nuestra elección del modelo Logística (MMPC). Este modelo se basa en un algoritmo de regresión logística, donde las variables predictoras han sido seleccionadas mediante el método MMPC. Los resultados pueden variar ligeramente al probar diferentes semillas de partición, razón por la cual se ha hecho especial hincapié en obtener un buen modelo al compararlo con muchos otros modelos.   
+
+Las predicciones finales se han estimado a partir del 90% de las observaciones, siendo lo más fieles posible a la realidad (donde se construiría el modelo con el 100% de los datos conocidos y se aplicaría sobre nuevas observaciones).   
+
+Por una parte, a través de los gráficos finales podríamos inferir una limitada eficiencia de las variables seleccionadas, ya que la separabilidad no es tan buena como esperaríamos a priori.  
+
+Por otra parte, la elección de un nuevo punto de corte nos proporciona unos resultados más prometedores. En este caso, el algoritmo es capaz de detectar más verdaderos positivos (VP), aunque suponga un aumento del número de falsos positivos (FP) al mismo tiempo. Se prioriza la capacidad de detectar fallecidos correctamente, o, en su defecto, de clasificar a pacientes no fallecidos como pacientes con riesgo de fallecer para así ofrecerles un seguimiento más cercano y ser precavidos.   
+
+Con todo, las principales dificultades de partida son las limitaciones impuestas por las pocas observaciones de nuestra base de datos y, sobre todo, las escasas observaciones de la clase minoritaria de la variable objetivo.  
+
+En todo momento, se ha procurado seguir un razonamiento lógico combinando los resultados obtenidos con el sentido común. A su vez, se ha perseguido el entendimiento de todo proceso con el objetivo, entre otros, de poder aplicarlo a otros futuros proyectos. La implantación de otros posibles modelos alternativos tiene cabida en este trabajo, pudiendo complementar y aportar información adicional.   
+
+
+
+
+
+
+
