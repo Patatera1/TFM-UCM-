@@ -1,4 +1,4 @@
-# TFM - Juan Fernando Plata Morán
+# TFM - Fernando Plata Morán
 Máster Minería de Datos e Inteligencia de Negocios, 2023.
 
 Los archivos importados son los siguientes:
